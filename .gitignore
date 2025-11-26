@@ -2,3 +2,4 @@
 *.pth
 src/tic_tac_toe_bolt/__pycache__/*
 src/tic_tac_toe_bolt.egg-info/*
+build/*

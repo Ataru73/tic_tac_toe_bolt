@@ -25,7 +25,7 @@ class TrainPipeline:
         self.buffer_size = 10000
         self.batch_size = 64 # mini-batch size for training
         self.data_buffer = deque(maxlen=self.buffer_size)
-        self.play_batch_size = 1
+        self.play_batch_size = 10
         self.epochs = 5 # num_train_steps per batch
         self.kl_targ = 0.02
         self.check_freq = 50
@@ -35,11 +35,15 @@ class TrainPipeline:
         # Environment
         self.env = gym.make("TicTacToeBolt-v0")
         
+        # Device
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device}")
+
         # Model
         if init_model:
-            self.policy_value_net = torch.load(init_model)
+            self.policy_value_net = torch.load(init_model, map_location=self.device)
         else:
-            self.policy_value_net = PolicyValueNet()
+            self.policy_value_net = PolicyValueNet().to(self.device)
             
         self.optimizer = optim.Adam(self.policy_value_net.parameters(), weight_decay=1e-4)
 
@@ -77,12 +81,12 @@ class TrainPipeline:
         # Channel 2
         input_board[0, 2, :, :] = 1.0
         
-        input_tensor = torch.FloatTensor(input_board)
+        input_tensor = torch.FloatTensor(input_board).to(self.device)
         
         # Predict
         with torch.no_grad():
             log_act_probs, value = self.policy_value_net(input_tensor)
-            act_probs = np.exp(log_act_probs.numpy().flatten())
+            act_probs = np.exp(log_act_probs.cpu().numpy().flatten())
             
         # Mask illegal moves
         probs = zip(legal_positions, act_probs[legal_positions])
@@ -197,8 +201,9 @@ class TrainPipeline:
             state_batch_tensor[i, 1, :, :] = torch.from_numpy((board == -1).astype(np.float32))
             state_batch_tensor[i, 2, :, :] = 1.0
             
-        mcts_probs_tensor = torch.FloatTensor(np.array(mcts_probs_batch))
-        winner_tensor = torch.FloatTensor(np.array(winner_batch))
+        mcts_probs_tensor = torch.FloatTensor(np.array(mcts_probs_batch)).to(self.device)
+        winner_tensor = torch.FloatTensor(np.array(winner_batch)).to(self.device)
+        state_batch_tensor = state_batch_tensor.to(self.device)
         
         # Train
         for _ in range(self.epochs):

@@ -86,34 +86,46 @@ public:
     torch::Tensor get_obs() const {
         // Convert board to tensor for NN input
         // Input shape: (1, 3, 3, 3) -> (Batch, Channels, H, W)
-        // Channels: P1, P2, Turn
+        // Channels: 
+        // 0: Current player's pieces with age encoding (0.33=oldest, 0.66=mid, 1.0=newest)
+        // 1: Opponent's pieces with age encoding
+        // 2: All 1.0 (indicating it's the current player's turn to move)
+        
         auto options = torch::TensorOptions().dtype(torch::kFloat32);
         torch::Tensor obs = torch::zeros({1, 3, 3, 3}, options);
         
-        for(int r=0; r<3; ++r) {
-            for(int c=0; c<3; ++c) {
-                if (board[r][c] == 1) {
-                    obs[0][0][r][c] = 1.0;
-                } else if (board[r][c] == -1) {
-                    obs[0][1][r][c] = 1.0;
+        // Helper to fill channel based on moves
+        auto fill_channel = [&](int channel, int player) {
+            if (player_moves.count(player)) {
+                const auto& moves = player_moves.at(player);
+                int n = moves.size();
+                for (int i = 0; i < n; ++i) {
+                    float val = 0.0f;
+                    // If 1 move: 1.0
+                    // If 2 moves: 0.66, 1.0
+                    // If 3 moves: 0.33, 0.66, 1.0
+                    // General formula: (i + 1 + (3 - n)) / 3.0 ? No.
+                    // Just simple mapping based on index relative to end?
+                    // Oldest is at index 0. Newest is at index n-1.
+                    // Let's stick to the requested:
+                    // 3 moves: [0.33, 0.66, 1.0]
+                    // 2 moves: [0.66, 1.0] or [0.33, 0.66]? 
+                    // Usually "Newest=1.0" is the anchor.
+                    // So: index n-1 -> 1.0. index n-2 -> 0.66. index n-3 -> 0.33.
+                    
+                    if (i == n - 1) val = 1.0f;
+                    else if (i == n - 2) val = 0.66f;
+                    else if (i == n - 3) val = 0.33f;
+                    
+                    obs[0][channel][moves[i].first][moves[i].second] = val;
                 }
             }
-        }
-        // Turn channel (all 1s if current_player is 1, else 0? Or just constant 1?)
-        // In AlphaZero usually it's who's turn it is.
-        // Let's check Python implementation... 
-        // Python model.py expects 3 channels. 
-        // Assuming channel 2 is all 1s indicating "current player's perspective"?
-        // Or one plane for P1, one for P2, one for "color to play".
-        // Let's assume standard AlphaZero encoding:
-        // P1 stones, P2 stones, Color to play (all 1 if P1, all 0 if P2).
-        // But since we always view from "current player", maybe:
-        // Self stones, Opponent stones, Color?
-        // Let's stick to what we see in test_model.py:
-        // Channel 0: Player 1 marks
-        // Channel 1: Player 2 marks
-        // Channel 2: Turn (all 1s) - Wait, test_model says "Turn (all 1s)".
-        // Let's assume it's always 1 for now.
+        };
+
+        fill_channel(0, current_player); // Self
+        fill_channel(1, -current_player); // Opponent
+        
+        // Channel 2: Turn indicator (always 1.0 for the player whose turn it is to move)
         obs[0][2] = 1.0; 
         
         return obs;
@@ -231,7 +243,8 @@ public:
             if (terminated) {
                 // Game over, current player won.
                 // Value for next player is -1.
-                node->update_recursive(-1.0);
+                // Value for current player (Parent of node) is +1.
+                node->update_recursive(1.0);
                 return;
             }
         }
@@ -277,7 +290,7 @@ public:
         node->expand(action_priors);
 
         // 4. Backup
-        node->update_recursive(leaf_value);
+        node->update_recursive(-leaf_value);
     }
 
     std::pair<std::vector<int>, std::vector<double>> get_move_probs(const TicTacToeState& state, double temp) {
@@ -348,6 +361,7 @@ PYBIND11_MODULE(_mcts_cpp, m) {
             return std::make_tuple(std::get<1>(res), std::get<2>(res));
         })
         .def("set_state", &TicTacToeState::set_state)
+        .def("get_obs", &TicTacToeState::get_obs)
         .def_readwrite("current_player", &TicTacToeState::current_player);
 
     py::class_<MCTS>(m, "MCTS")

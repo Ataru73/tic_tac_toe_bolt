@@ -30,8 +30,7 @@ class PolicyValueNet(nn.Module):
         self.value_fc2 = nn.Linear(64, 1)
 
     def forward(self, x):
-        # x shape: (batch_size, 3, 3, 3) -> needs to be (batch_size, 3, 3, 3) or (batch_size, 3, 3, 3) depending on how we construct it.
-        # PyTorch expects (batch_size, channels, height, width)
+        # Input shape: (batch_size, channels=3, height=3, width=3)
         
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))

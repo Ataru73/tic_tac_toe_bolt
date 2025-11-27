@@ -114,7 +114,7 @@ class MCTS:
         node.expand(action_probs)
         
         # 3. Backup
-        node.update_recursive(leaf_value) 
+        node.update_recursive(-leaf_value) 
 
     def get_move_probs(self, state, temp=1e-3):
         """Run all playouts sequentially and return the available actions and

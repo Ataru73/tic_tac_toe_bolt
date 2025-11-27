@@ -27,19 +27,32 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
         policy_value_net = torch.jit.load(model_path, map_location=device)
         
         def policy_value_fn(env):
-            board = env.unwrapped.board
+            # Same logic as TrainPipeline.policy_value_fn but standalone
             legal_positions = []
             for i in range(9):
-                if board[i // 3, i % 3] == 0:
+                if env.unwrapped.board[i // 3, i % 3] == 0:
                     legal_positions.append(i)
             
             current_player = env.unwrapped.current_player
-            canonical_board = board * current_player
+            player_moves = env.unwrapped.player_moves
             
             input_board = np.zeros((1, 3, 3, 3))
-            input_board[0, 0, :, :] = (canonical_board == 1)
-            input_board[0, 1, :, :] = (canonical_board == -1)
-            input_board[0, 2, :, :] = 1.0
+            
+            # Helper to fill channel
+            def fill_channel(channel, p):
+                if p in player_moves:
+                    moves = player_moves[p]
+                    n = len(moves)
+                    for idx, (r, c) in enumerate(moves):
+                        val = 0.0
+                        if idx == n - 1: val = 1.0
+                        elif idx == n - 2: val = 0.66
+                        elif idx == n - 3: val = 0.33
+                        input_board[0, channel, r, c] = val
+
+            fill_channel(0, current_player) # Self
+            fill_channel(1, -current_player) # Opponent
+            input_board[0, 2, :, :] = 1.0 # Turn
             
             input_tensor = torch.FloatTensor(input_board).to(device)
             
@@ -60,10 +73,32 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
         states, mcts_probs, current_players = [], [], []
         
         while True:
-            acts, probs = mcts.get_move_probs(env, temp=temp)
+            # We need the state representation for the buffer
+            # Re-generate it here to ensure we save exactly what MCTS sees (conceptually)
+            # Actually, MCTS_CPP does this internally. We need to replicate it for the python buffer.
             
-            canonical_board = env.unwrapped.board.copy() * env.unwrapped.current_player
-            states.append(canonical_board)
+            current_player = env.unwrapped.current_player
+            player_moves = env.unwrapped.player_moves
+            state_tensor = np.zeros((3, 3, 3)) # (Channels, H, W)
+            
+            def fill_channel_np(channel, p):
+                if p in player_moves:
+                    moves = player_moves[p]
+                    n = len(moves)
+                    for idx, (r, c) in enumerate(moves):
+                        val = 0.0
+                        if idx == n - 1: val = 1.0
+                        elif idx == n - 2: val = 0.66
+                        elif idx == n - 3: val = 0.33
+                        state_tensor[channel, r, c] = val
+            
+            fill_channel_np(0, current_player)
+            fill_channel_np(1, -current_player)
+            state_tensor[2, :, :] = 1.0
+            
+            states.append(state_tensor) # Save the (3,3,3) tensor
+            
+            acts, probs = mcts.get_move_probs(env, temp=temp)
             
             prob_vec = np.zeros(9)
             for a, p in zip(acts, probs):
@@ -89,8 +124,6 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                 winner_z = np.zeros(len(current_players))
                 all_play_data.append(list(zip(states, mcts_probs, winner_z)))
                 break # Break from inner while loop to start next game
-
-    return all_play_data
 
     return all_play_data
 
@@ -144,7 +177,7 @@ class TrainPipeline:
         self.lr_multiplier = 1.0
         self.temp = 1.0
         self.n_playout = 50 # Reduced from 400
-        self.c_puct = 5
+        self.c_puct = 8
         self.buffer_size = 10000
         self.batch_size = 64 # mini-batch size for training
         self.data_buffer = deque(maxlen=self.buffer_size)
@@ -193,33 +226,30 @@ class TrainPipeline:
         output: a list of (action, probability) tuples for each available
         action and the score of the board state
         """
-        # Get legal moves
-        # In our env, we can check board for 0s.
-        board = env.unwrapped.board
-        legal_positions = np.argwhere(board.flatten() == 0).flatten() # Wait, infinite mechanic means all moves are valid unless occupied?
-        # Yes, but occupied squares are invalid.
-        # Actually, if we place on occupied, we get -10.
-        # So we should consider occupied as illegal for MCTS to avoid wasting simulations.
         legal_positions = []
         for i in range(9):
-            r, c = i // 3, i % 3
-            if board[r, c] == 0:
+            if env.unwrapped.board[i // 3, i % 3] == 0:
                 legal_positions.append(i)
         
-        # Prepare input
-        # Channel 0: Current player marks (1s)
-        # Channel 1: Opponent marks (-1s)
-        # Channel 2: 1s (Turn)
         current_player = env.unwrapped.current_player
-        canonical_board = board * current_player
+        player_moves = env.unwrapped.player_moves
         
         input_board = np.zeros((1, 3, 3, 3))
-        # Channel 0: My marks (where canonical_board == 1)
-        input_board[0, 0, :, :] = (canonical_board == 1)
-        # Channel 1: Opponent marks (where canonical_board == -1)
-        input_board[0, 1, :, :] = (canonical_board == -1)
-        # Channel 2
-        input_board[0, 2, :, :] = 1.0
+        
+        def fill_channel(channel, p):
+            if p in player_moves:
+                moves = player_moves[p]
+                n = len(moves)
+                for idx, (r, c) in enumerate(moves):
+                    val = 0.0
+                    if idx == n - 1: val = 1.0
+                    elif idx == n - 2: val = 0.66
+                    elif idx == n - 3: val = 0.33
+                    input_board[0, channel, r, c] = val
+
+        fill_channel(0, current_player) # Self
+        fill_channel(1, -current_player) # Opponent
+        input_board[0, 2, :, :] = 1.0 # Turn
         
         input_tensor = torch.FloatTensor(input_board).to(self.device)
         
@@ -234,21 +264,32 @@ class TrainPipeline:
     
     def get_policy_value_fn(self, policy_value_net):
         def policy_value_fn(env):
-            board = env.unwrapped.board
+            legal_positions = []
+            for i in range(9):
+                if env.unwrapped.board[i // 3, i % 3] == 0:
+                    legal_positions.append(i)
+            
             current_player = env.unwrapped.current_player
-            canonical_board = board * current_player
+            player_moves = env.unwrapped.player_moves
             
             input_board = np.zeros((1, 3, 3, 3))
-            input_board[0, 0, :, :] = (canonical_board == 1)
-            input_board[0, 1, :, :] = (canonical_board == -1)
+            
+            def fill_channel(channel, p):
+                if p in player_moves:
+                    moves = player_moves[p]
+                    n = len(moves)
+                    for idx, (r, c) in enumerate(moves):
+                        val = 0.0
+                        if idx == n - 1: val = 1.0
+                        elif idx == n - 2: val = 0.66
+                        elif idx == n - 3: val = 0.33
+                        input_board[0, channel, r, c] = val
+
+            fill_channel(0, current_player)
+            fill_channel(1, -current_player)
             input_board[0, 2, :, :] = 1.0
             
             input_tensor = torch.FloatTensor(input_board).to(self.device)
-            
-            legal_positions = []
-            for i in range(9):
-                if board[i // 3, i % 3] == 0:
-                    legal_positions.append(i)
 
             with torch.no_grad():
                 log_act_probs, value = policy_value_net(input_tensor)
@@ -398,17 +439,20 @@ class TrainPipeline:
         """
         extend_data = []
         for state, mcts_prob, winner in play_data:
-            # state: 3x3 board
+            # state: (3, 3, 3) tensor (C, H, W)
             # mcts_prob: 9-dim vector
             for i in [1, 2, 3, 4]:
                 # rotate counter-clockwise
-                equi_state = np.array([np.rot90(state, i)])
+                # np.rot90 rotates axes (0, 1) by default.
+                # state is (C, H, W). We want to rotate H, W (axes 1, 2).
+                equi_state = np.rot90(state, i, axes=(1, 2))
                 equi_mcts_prob = np.rot90(mcts_prob.reshape(3, 3), i)
-                extend_data.append((equi_state[0], equi_mcts_prob.flatten(), winner))
-                # flip horizontally
-                equi_state = np.array([np.fliplr(state)])
-                equi_mcts_prob = np.fliplr(mcts_prob.reshape(3, 3))
-                extend_data.append((equi_state[0], equi_mcts_prob.flatten(), winner))
+                extend_data.append((equi_state, equi_mcts_prob.flatten(), winner))
+                
+                # flip horizontally (axis 2)
+                equi_state_flip = np.flip(equi_state, axis=2)
+                equi_mcts_prob_flip = np.fliplr(equi_mcts_prob)
+                extend_data.append((equi_state_flip, equi_mcts_prob_flip.flatten(), winner))
         return extend_data
 
     def policy_update(self):
@@ -419,16 +463,11 @@ class TrainPipeline:
         winner_batch = [data[2] for data in mini_batch]
         
         # Convert to tensors
-        # State batch needs to be converted to (Batch, 3, 3, 3)
-        state_batch_tensor = torch.zeros(self.batch_size, 3, 3, 3)
-        for i, board in enumerate(state_batch):
-            state_batch_tensor[i, 0, :, :] = torch.from_numpy((board == 1).astype(np.float32))
-            state_batch_tensor[i, 1, :, :] = torch.from_numpy((board == -1).astype(np.float32))
-            state_batch_tensor[i, 2, :, :] = 1.0
+        # state_batch is already a list of (3, 3, 3) numpy arrays
+        state_batch_tensor = torch.FloatTensor(np.array(state_batch)).to(self.device)
             
         mcts_probs_tensor = torch.FloatTensor(np.array(mcts_probs_batch)).to(self.device)
         winner_tensor = torch.FloatTensor(np.array(winner_batch)).to(self.device)
-        state_batch_tensor = state_batch_tensor.to(self.device)
         
         # Train
         for _ in range(self.epochs):

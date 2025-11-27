@@ -7,11 +7,12 @@ import copy
 class TicTacToeBoltEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, max_moves=100):
         self.window_size = 512  # The size of the PyGame window
         self.observation_space = spaces.Box(low=-1, high=1, shape=(3, 3), dtype=np.int8)
         self.action_space = spaces.Discrete(9)
         self.render_mode = render_mode
+        self.max_moves = max_moves
         self.window = None
         self.clock = None
         
@@ -19,12 +20,14 @@ class TicTacToeBoltEnv(gym.Env):
         self.board = None
         self.current_player = 1 # 1 or -1
         self.player_moves = {1: [], -1: []} # Track moves for "Infinite" mechanic
+        self.move_count = 0
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.board = np.zeros((3, 3), dtype=np.int8)
         self.current_player = 1
         self.player_moves = {1: [], -1: []}
+        self.move_count = 0
         
         observation = self._get_obs()
         info = self._get_info()
@@ -41,15 +44,6 @@ class TicTacToeBoltEnv(gym.Env):
 
         # Check if move is valid
         if self.board[row, col] != 0:
-            # Invalid move: return same state, no reward (or negative reward if desired), not done
-            # For this implementation, let's give a small negative reward for invalid move and continue
-            # Or we can just ignore it. Let's return a large negative reward and end game? 
-            # Or just ignore. Standard gym practice varies. 
-            # Let's treat it as an invalid move that doesn't change state but gives penalty?
-            # User didn't specify invalid move handling. 
-            # Let's assume the agent should learn not to do it.
-            # We will return a large negative reward and terminate to speed up learning valid moves?
-            # Or just -10 and continue. Let's do -10 and continue.
             return self._get_obs(), -10, False, False, self._get_info()
 
         # "Infinite" mechanic: Check if player has 3 marks
@@ -61,6 +55,7 @@ class TicTacToeBoltEnv(gym.Env):
         # Place new mark
         self.board[row, col] = self.current_player
         self.player_moves[self.current_player].append((row, col))
+        self.move_count += 1
 
         # Check for win
         if self._check_win(self.current_player):
@@ -72,13 +67,18 @@ class TicTacToeBoltEnv(gym.Env):
             terminated = False
             winner = 0
         
+        # Check for truncation (max moves)
+        truncated = False
+        if not terminated and self.move_count >= self.max_moves:
+            truncated = True
+
         # Switch player
         self.current_player *= -1
 
         if self.render_mode == "human":
             self._render_frame()
 
-        return self._get_obs(), reward, terminated, False, self._get_info()
+        return self._get_obs(), reward, terminated, truncated, self._get_info()
 
     def _get_obs(self):
         return self.board.copy()
@@ -189,6 +189,7 @@ class TicTacToeBoltEnv(gym.Env):
         new_env.observation_space = self.observation_space
         new_env.action_space = self.action_space
         new_env.render_mode = None  # Don't copy render mode to avoid pygame issues
+        new_env.max_moves = self.max_moves
         new_env.window = None
         new_env.clock = None
         
@@ -196,6 +197,7 @@ class TicTacToeBoltEnv(gym.Env):
         new_env.board = self.board.copy() if self.board is not None else None
         new_env.current_player = self.current_player
         new_env.player_moves = copy.deepcopy(self.player_moves, memo)
+        new_env.move_count = self.move_count
         
         return new_env
 

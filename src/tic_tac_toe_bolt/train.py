@@ -58,8 +58,6 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
         mcts.update_with_move(-1) # Reset MCTS tree for new game
 
         states, mcts_probs, current_players = [], [], []
-        move_count = 0
-        max_moves = 100
         
         while True:
             acts, probs = mcts.get_move_probs(env, temp=temp)
@@ -77,7 +75,6 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
             mcts.update_with_move(move)
             
             obs, reward, terminated, truncated, info = env.step(move)
-            move_count += 1
             
             if terminated:
                 actual_winner = -env.unwrapped.current_player
@@ -88,10 +85,12 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                 all_play_data.append(list(zip(states, mcts_probs, winner_z)))
                 break # Break from inner while loop to start next game
                 
-            if truncated or move_count >= max_moves:
+            if truncated:
                 winner_z = np.zeros(len(current_players))
                 all_play_data.append(list(zip(states, mcts_probs, winner_z)))
                 break # Break from inner while loop to start next game
+
+    return all_play_data
 
     return all_play_data
 
@@ -168,11 +167,25 @@ class TrainPipeline:
 
         # Model
         if init_model:
-            self.policy_value_net = torch.load(init_model, map_location=self.device)
-        else:
+            # Check if it's a full checkpoint or just model weights
+            checkpoint = torch.load(init_model, map_location=self.device)
             self.policy_value_net = PolicyValueNet().to(self.device)
             
-        self.optimizer = optim.Adam(self.policy_value_net.parameters(), weight_decay=1e-4)
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                self.policy_value_net.load_state_dict(checkpoint['model_state_dict'])
+                print(f"Loaded model from {init_model}")
+                self.optimizer = optim.Adam(self.policy_value_net.parameters(), weight_decay=1e-4)
+                if 'optimizer_state_dict' in checkpoint:
+                    self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                    print("Loaded optimizer state.")
+            else:
+                # Assume it's just state_dict (legacy or simple save)
+                self.policy_value_net.load_state_dict(checkpoint)
+                print(f"Loaded model weights from {init_model}")
+                self.optimizer = optim.Adam(self.policy_value_net.parameters(), weight_decay=1e-4)
+        else:
+            self.policy_value_net = PolicyValueNet().to(self.device)
+            self.optimizer = optim.Adam(self.policy_value_net.parameters(), weight_decay=1e-4)
 
     def policy_value_fn(self, env):
         """
@@ -334,6 +347,12 @@ class TrainPipeline:
                                                      
         except KeyboardInterrupt:
             print('\n\rquit')
+            print("Saving checkpoint...")
+            checkpoint = {
+                'model_state_dict': self.policy_value_net.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict()
+            }
+            torch.save(checkpoint, 'checkpoint.pth')
 
     def collect_selfplay_data(self, n_games=1):
         # Save model for workers
@@ -432,11 +451,16 @@ class TrainPipeline:
 
 import torch.nn.functional as F
 import multiprocessing
+import argparse
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
+    args = parser.parse_args()
+
     try:
         multiprocessing.set_start_method('spawn')
     except RuntimeError:
         pass
-    training = TrainPipeline()
+    training = TrainPipeline(init_model=args.resume)
     training.run()

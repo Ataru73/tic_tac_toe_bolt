@@ -25,7 +25,6 @@ class MCTSPlayer:
             acts, probs = self.mcts.get_move_probs(env, temp=1e-3)
             # Choose action with highest prob
             move = acts[np.argmax(probs)]
-            self.mcts.update_with_move(-1) 
             return move
         else:
             print("WARNING: No sensible moves found!")
@@ -88,6 +87,9 @@ def evaluate_models(model1_path, model2_path, n_games, c_puct, n_playout):
     results = [0, 0, 0]
     
     for i in range(n_games):
+        player1.reset_player()
+        player2.reset_player()
+
         # Alternate starting player
         # If i is even, Model 1 is Player 1 (starts).
         # If i is odd, Model 2 is Player 1 (starts).
@@ -106,6 +108,11 @@ def evaluate_models(model1_path, model2_path, n_games, c_puct, n_playout):
             current_player_idx = env.unwrapped.current_player
             player = players[current_player_idx]
             action = player.get_action(env)
+
+            # Update both players' MCTS with the chosen action
+            player1.mcts.update_with_move(action)
+            player2.mcts.update_with_move(action)
+
             obs, reward, terminated, truncated, info = env.step(action)
             
             if terminated:

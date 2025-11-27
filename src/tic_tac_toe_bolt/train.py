@@ -11,6 +11,46 @@ from tic_tac_toe_bolt.model import PolicyValueNet
 from tic_tac_toe_bolt.mcts import MCTS, MCTS_CPP
 import tic_tac_toe_bolt # Register env
 
+class MCTSPlayer:
+    def __init__(self, policy_value_fn, c_puct=5, n_playout=400, is_selfplay=0):
+        self.mcts = MCTS(policy_value_fn, c_puct, n_playout)
+        self._is_selfplay = is_selfplay
+
+    def set_player_ind(self, p):
+        self.player = p
+
+    def reset_player(self):
+        self.mcts.update_with_move(-1)
+
+    def get_action(self, env, temp=1e-3, return_prob=0):
+        sensible_moves = [i for i in range(9) if env.unwrapped.board[i//3, i%3] == 0]
+        # the pi vector returned by MCTS as in the alphaGo Zero paper
+        move_probs = np.zeros(9)
+        if len(sensible_moves) > 0:
+            acts, probs = self.mcts.get_move_probs(env, temp)
+            move_probs[list(acts)] = probs
+            if self._is_selfplay:
+                # add Dirichlet Noise for exploration (needed for self-play training)
+                move = np.random.choice(
+                    acts,
+                    p=0.75*probs + 0.25*np.random.dirichlet(0.3*np.ones(len(probs)))
+                )
+                # update the root node and reuse the search tree
+                self.mcts.update_with_move(move)
+            else:
+                # with the default temp=1e-3, it is almost equivalent to choosing the move with the highest prob
+                move = np.random.choice(acts, p=probs)
+                # reset the root node
+                self.mcts.update_with_move(-1)
+
+            if return_prob:
+                return move, move_probs
+            else:
+                return move
+        else:
+            print("WARNING: No sensible moves found!")
+            return -1
+
 class TrainPipeline:
     def __init__(self, init_model=None):
         # Params
@@ -34,6 +74,7 @@ class TrainPipeline:
         
         # Environment
         self.env = gym.make("TicTacToeBolt-v0")
+        self.eval_env = gym.make("TicTacToeBolt-v0")
         
         # Device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -91,19 +132,114 @@ class TrainPipeline:
         # Mask illegal moves
         probs = zip(legal_positions, act_probs[legal_positions])
         return probs, value.item()
+    
+    def get_policy_value_fn(self, policy_value_net):
+        def policy_value_fn(env):
+            board = env.unwrapped.board
+            current_player = env.unwrapped.current_player
+            canonical_board = board * current_player
+            
+            input_board = np.zeros((1, 3, 3, 3))
+            input_board[0, 0, :, :] = (canonical_board == 1)
+            input_board[0, 1, :, :] = (canonical_board == -1)
+            input_board[0, 2, :, :] = 1.0
+            
+            input_tensor = torch.FloatTensor(input_board).to(self.device)
+            
+            legal_positions = []
+            for i in range(9):
+                if board[i // 3, i % 3] == 0:
+                    legal_positions.append(i)
+
+            with torch.no_grad():
+                log_act_probs, value = policy_value_net(input_tensor)
+                act_probs = np.exp(log_act_probs.cpu().numpy().flatten())
+                
+            return zip(legal_positions, act_probs[legal_positions]), value.item()
+        return policy_value_fn
+
+    def evaluate_policy(self, n_games=10):
+        """
+        Evaluate the trained policy by playing against the best policy
+        Note: this is only for monitoring the progress of training
+        """
+        current_mcts_player = MCTSPlayer(self.policy_value_fn, c_puct=self.c_puct, n_playout=self.n_playout)
+        best_mcts_player = MCTSPlayer(self.get_policy_value_fn(self.best_policy_net), c_puct=self.c_puct, n_playout=self.n_playout)
+        
+        win_cnt = {1: 0, -1: 0, 0: 0} # 1: current, -1: best, 0: draw
+        
+        for i in range(n_games):
+            # Alternate start
+            if i % 2 == 0:
+                # Current starts (Player 1), Best is Player -1
+                players = {1: current_mcts_player, -1: best_mcts_player}
+                current_player_key = 1
+            else:
+                # Best starts (Player 1), Current is Player -1
+                players = {1: best_mcts_player, -1: current_mcts_player}
+                current_player_key = -1
+                
+            obs, _ = self.eval_env.reset()
+            current_mcts_player.reset_player()
+            best_mcts_player.reset_player()
+            done = False
+            
+            while not done:
+                current_player_idx = self.eval_env.unwrapped.current_player
+                player = players[current_player_idx]
+                action = player.get_action(self.eval_env)
+                
+                # Update both players with the move (essential for correct MCTS state)
+                current_mcts_player.mcts.update_with_move(action)
+                best_mcts_player.mcts.update_with_move(action)
+                
+                obs, reward, terminated, truncated, _ = self.eval_env.step(action)
+                
+                if terminated:
+                    # current_player_idx won
+                    if current_player_idx == current_player_key:
+                        win_cnt[1] += 1
+                    else:
+                        win_cnt[-1] += 1
+                    done = True
+                elif truncated:
+                    win_cnt[0] += 1
+                    done = True
+                    
+        return win_cnt
 
     def run(self):
+        # Initialize best policy as current policy
+        self.best_policy_net = copy.deepcopy(self.policy_value_net)
+        
         try:
             for i in range(self.game_batch_num):
                 self.collect_selfplay_data(self.play_batch_size)
                 print(f"Batch i:{i+1}, Episode Len:{self.episode_len}")
                 if len(self.data_buffer) > self.batch_size:
+                    # Save current weights before update
+                    old_params = copy.deepcopy(self.policy_value_net.state_dict())
+                    
                     loss, entropy = self.policy_update()
                     print(f"Loss: {loss:.4f}, Entropy: {entropy:.4f}")
                     
-                if (i+1) % self.check_freq == 0:
-                    print("Saving model...")
-                    torch.save(self.policy_value_net.state_dict(), f'current_policy_{i+1}.pth')
+                    # Evaluate
+                    if (i+1) % self.check_freq == 0:
+                        print("Evaluating new policy against best policy...")
+                        win_cnt = self.evaluate_policy(n_games=10)
+                        print(f"Eval Results (Current vs Best): Wins: {win_cnt[1]}, Losses: {win_cnt[-1]}, Draws: {win_cnt[0]}")
+                        
+                        win_ratio = 1.0 * (win_cnt[1] + 0.5*win_cnt[0]) / (sum(win_cnt.values()))
+                        print(f"Win Ratio: {win_ratio:.2f}")
+                        
+                        if win_ratio >= 0.55: # If improvement
+                            print("New best policy found! Saving...")
+                            self.best_policy_net.load_state_dict(self.policy_value_net.state_dict())
+                            torch.save(self.policy_value_net.state_dict(), f'current_policy_{i+1}.pth')
+                        else:
+                            print("New policy not better. Reverting.")
+                            self.policy_value_net.load_state_dict(old_params)
+                            
         except KeyboardInterrupt:
             print('\n\rquit')
 
@@ -164,13 +300,14 @@ class TrainPipeline:
                 # The values in winner_z should be relative to the player at that step.
                 # If player P1 won, then for all steps where P1 moved, return 1.
                 # For all steps where P2 moved, return -1.
+                actual_winner = -env.unwrapped.current_player # The player who just moved and won
                 winner_z = np.zeros(len(current_players))
-                winner_z[np.array(current_players) == env.unwrapped.current_player] = 1.0
-                winner_z[np.array(current_players) != env.unwrapped.current_player] = -1.0
+                winner_z[np.array(current_players) == actual_winner] = 1.0
+                winner_z[np.array(current_players) != actual_winner] = -1.0
                 
                 # Reset MCTS
                 mcts.update_with_move(-1) 
-                return env.unwrapped.current_player, zip(states, mcts_probs, winner_z)
+                return actual_winner, zip(states, mcts_probs, winner_z)
                 
             if truncated: # Should not happen in infinite tic tac toe usually, unless we set a limit
                 # Draw? Or just stop.

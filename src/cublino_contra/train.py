@@ -11,10 +11,18 @@ import concurrent.futures
 import time
 import argparse
 import multiprocessing
+import sys
 
-from src.cublino_contra.model import PolicyValueNet
-from src.cublino_contra.mcts import MCTS, MCTS_CPP
-from src.cublino_contra.env import CublinoContraEnv
+try:
+    from src.cublino_contra.model import PolicyValueNet
+    from src.cublino_contra.mcts import MCTS, MCTS_CPP
+    from src.cublino_contra.env import CublinoContraEnv
+except ImportError:
+    # If running as script from src/cublino_contra/
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+    from cublino_contra.model import PolicyValueNet
+    from cublino_contra.mcts import MCTS, MCTS_CPP
+    from cublino_contra.env import CublinoContraEnv
 
 def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_games_to_play_per_worker):
     """ Worker function for parallel self-play """
@@ -153,7 +161,7 @@ class TrainPipeline:
         self.buffer_size = 10000
         self.batch_size = 64
         self.data_buffer = deque(maxlen=self.buffer_size)
-        self.play_batch_size = 1
+        self.play_batch_size = 10
         self.num_games_per_worker = 1
         self.epochs = 5
         self.check_freq = 50

@@ -60,17 +60,7 @@ class MCTS:
             action, node = node.select(self._c_puct)
             obs, reward, terminated, truncated, info = state.step(action)
             
-            if terminated:
-                # If the game ended, the value is from the perspective of the player who just moved.
-                # If reward is 1 (win), then the previous player won.
-                # The next player (current state) is the loser.
-                # So leaf_value for the current node (next player) should be -1.
-                leaf_value = -1.0 
-                if reward == 0: # Draw
-                     leaf_value = 0.0
-                
-                node.update_recursive(-leaf_value)
-                return
+
 
         # 2. Expansion and Evaluation
         action_probs, leaf_value = self._policy(state)

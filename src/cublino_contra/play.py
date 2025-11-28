@@ -6,6 +6,8 @@ import numpy as np
 import argparse
 import sys
 import time
+
+os.environ['PYOPENGL_PLATFORM'] = 'glx'
 from OpenGL.GL import *
 from OpenGL.GLU import *
 from OpenGL.GLUT import *

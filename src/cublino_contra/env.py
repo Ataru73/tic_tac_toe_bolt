@@ -46,14 +46,20 @@ class CublinoContraEnv(gym.Env):
 
         # Setup P2 (Row 6)
         # Top=6, South=4 (Since North is 3 relative to P2, so South is 7-3=4)
-        # Wait, rules say: "dice are oriented with the '6' face up and the '3' face pointing towards the player."
-        # P2 is at Row 6 (Top of board). "Towards P2" is North (Up).
-        # So P2's dice have 3 facing North.
-        # So South face is 7-3 = 4.
         for col in range(self.board_size):
             self.board[6, col] = [-1, 6, 4]
+            
+        # Draw history for 3-fold repetition
+        self.history = {}
+        # Add initial state
+        state_key = self._get_state_key()
+        self.history[state_key] = 1
 
         return self._get_obs(), {}
+
+    def _get_state_key(self):
+        # Include current player in the state key to distinguish turns
+        return (bytes(self.board), self.current_player)
 
     def _get_obs(self):
         return self.board.copy()
@@ -113,6 +119,13 @@ class CublinoContraEnv(gym.Env):
 
         # Switch Turn
         self.current_player *= -1
+        
+        # Check 3-fold repetition
+        state_key = self._get_state_key()
+        self.history[state_key] = self.history.get(state_key, 0) + 1
+        
+        if self.history[state_key] >= 3:
+            return self._get_obs(), 0, True, False, {"winner": 0, "reason": "3-fold repetition"}
 
         return self._get_obs(), 0, False, False, {}
 

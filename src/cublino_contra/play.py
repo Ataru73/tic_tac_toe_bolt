@@ -2,10 +2,13 @@ import gymnasium as gym
 import os
 import torch
 import numpy as np
-import pygame
+
 import argparse
 import sys
 import time
+from OpenGL.GL import *
+from OpenGL.GLU import *
+from OpenGL.GLUT import *
 
 try:
     from src.cublino_contra.model import PolicyValueNet
@@ -23,72 +26,17 @@ class HumanPlayer:
         self.player = None
         self.selected_square = None # (row, col)
         self.legal_moves = [] # List of (target_row, target_col) for selected square
+        self.pending_action = None # New: to store action from mouse callback
     
     def set_player_ind(self, p):
         self.player = p
 
     def get_action(self, env):
-        # Wait for mouse click
-        # We need to handle selection logic here.
-        # 1. Click on own piece -> Select it, show legal moves.
-        # 2. Click on legal target -> Execute move.
-        # 3. Click elsewhere -> Deselect.
-        
-        while True:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    sys.exit()
-                
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    x, y = event.pos
-                    # Map to grid
-                    # Window size is 700 (100 per cell)
-                    cell_size = 100
-                    col = int(x // cell_size)
-                    row = int(y // cell_size)
-                    # PyGame coords: (0,0) is top-left.
-                    # Board coords: (0,0) is bottom-left (Row 0).
-                    # So Row 0 is at y=600. Row 6 is at y=0.
-                    # row_idx = 6 - row
-                    board_row = 6 - row
-                    board_col = col
-                    
-                    if not (0 <= board_row < 7 and 0 <= board_col < 7):
-                        continue
-                        
-                    # Check if clicked on own piece
-                    if env.unwrapped.board[board_row, board_col, 0] == self.player:
-                        self.selected_square = (board_row, board_col)
-                        # Calculate legal moves for this piece
-                        self.legal_moves = []
-                        # Check 4 directions
-                        for d in range(4):
-                            dr, dc = 0, 0
-                            if d == 0: dr = 1
-                            elif d == 1: dc = 1
-                            elif d == 2: dr = -1
-                            elif d == 3: dc = -1
-                            
-                            tr, tc = board_row + dr, board_col + dc
-                            if 0 <= tr < 7 and 0 <= tc < 7 and env.unwrapped.board[tr, tc, 0] == 0:
-                                self.legal_moves.append((tr, tc, d))
-                                
-                    elif self.selected_square:
-                        # Check if clicked on a legal target
-                        for tr, tc, d in self.legal_moves:
-                            if tr == board_row and tc == board_col:
-                                # Execute move
-                                sr, sc = self.selected_square
-                                action = (sr * 7 + sc) * 4 + d
-                                self.selected_square = None
-                                self.legal_moves = []
-                                return action
-                        
-                        # If not a legal target, deselect
-                        self.selected_square = None
-                        self.legal_moves = []
-            
-            render_game(env, self.selected_square, self.legal_moves)
+        if self.pending_action is not None:
+            action = self.pending_action
+            self.pending_action = None
+            return action
+        return None
 
 class MCTSPlayer:
     def __init__(self, policy_value_function, c_puct=5, n_playout=2000, use_cpp=False, model_path=None, device="cpu"):
@@ -130,76 +78,37 @@ class MCTSPlayer:
             print("WARNING: No sensible moves found!")
             return -1
 
-def render_game(env, selected_square=None, legal_moves=None):
-    screen = pygame.display.get_surface()
-    if screen is None:
-        pygame.init()
-        screen = pygame.display.set_mode((700, 700))
-        pygame.display.set_caption("Cublino Contra")
-        
-    screen.fill((255, 255, 255)) # White background
-    
-    cell_size = 100
-    font = pygame.font.SysFont(None, 36)
-    
-    # Draw Grid
-    for r in range(7):
-        for c in range(7):
-            rect = pygame.Rect(c * cell_size, (6 - r) * cell_size, cell_size, cell_size)
-            pygame.draw.rect(screen, (0, 0, 0), rect, 1)
-            
-            # Draw Content
-            p, top, south = env.unwrapped.board[r, c]
-            if p != 0:
-                color = (200, 0, 0) if p == 1 else (0, 0, 200) # Red for P1, Blue for P2
-                pygame.draw.circle(screen, color, rect.center, 40)
-                
-                # Draw Values
-                text = font.render(f"{top}/{south}", True, (255, 255, 255))
-                text_rect = text.get_rect(center=rect.center)
-                screen.blit(text, text_rect)
-                
-    # Highlight Selection
-    if selected_square:
-        r, c = selected_square
-        rect = pygame.Rect(c * cell_size, (6 - r) * cell_size, cell_size, cell_size)
-        pygame.draw.rect(screen, (0, 255, 0), rect, 5) # Green border
-        
-    # Highlight Legal Moves
-    if legal_moves:
-        for r, c, d in legal_moves:
-            rect = pygame.Rect(c * cell_size, (6 - r) * cell_size, cell_size, cell_size)
-            s = pygame.Surface((cell_size, cell_size))
-            s.set_alpha(100)
-            s.fill((0, 255, 0))
-            screen.blit(s, rect.topleft)
 
-    pygame.display.flip()
+
+camera_distance = 15.0
+camera_angle_y = 45.0
+camera_angle_x = 30.0
+
+# Global variables for GLUT callbacks
+current_env = None
+human_player_instance = None
+ai_player_instance = None
+current_player_is_human = False
+last_frame_time = time.time()
+
 
 def run_game(model_path=None, human_starts=True, difficulty=20):
+    # 1. Initialize Environment
     env = gym.make("CublinoContra-v0")
     env.reset()
     
-    # Init PyGame
-    pygame.init()
-    pygame.display.set_mode((700, 700))
-    pygame.display.set_caption("Cublino Contra")
-    
+    # 2. Initialize AI and Model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # Load model
     policy_value_net = PolicyValueNet(board_size=7).to(device)
     if model_path and os.path.exists(model_path):
-        # Check if it's a state dict or script
         try:
             policy_value_net.load_state_dict(torch.load(model_path, map_location=device))
             print(f"Loaded model from {model_path}")
         except:
              print(f"Could not load state dict from {model_path}. Assuming it is a script model or invalid.")
-             # If it's a script model, we can't load it into PolicyValueNet directly easily for Python inference
-             # But we need it for Python fallback.
-             # For now, assume state dict.
     elif model_path:
         print(f"Warning: Model path {model_path} does not exist. Using untrained model.")
     else:
@@ -209,11 +118,11 @@ def run_game(model_path=None, human_starts=True, difficulty=20):
     model_path_cpp = "temp_play_model_cublino.pt"
     script_model = torch.jit.script(policy_value_net.cpu())
     script_model.save(model_path_cpp)
-    policy_value_net.to(device)
+    policy_value_net.to(device) # Move back to device if needed
 
     def policy_value_fn(env):
-        legal_actions = env.get_legal_actions()
-        board = env.board
+        legal_actions = env.unwrapped.get_legal_actions() # Use unwrapped for accessing method
+        board = env.unwrapped.board
         board_tensor = torch.FloatTensor(board).permute(2, 0, 1).unsqueeze(0).to(device)
         
         with torch.no_grad():
@@ -230,48 +139,254 @@ def run_game(model_path=None, human_starts=True, difficulty=20):
     human = HumanPlayer()
     ai_player = MCTSPlayer(policy_value_fn, c_puct=5, n_playout=n_playout, use_cpp=True, model_path=model_path_cpp, device=device)
     
-    players = {1: human, -1: ai_player}
-    if not human_starts:
-        players = {1: ai_player, -1: human}
-            
     human.set_player_ind(1 if human_starts else -1)
     ai_player.set_player_ind(-1 if human_starts else 1)
-
-    obs, info = env.reset()
-    done = False
     
     ai_player.reset_player()
 
-    while not done:
-        render_game(env, human.selected_square, human.legal_moves)
+    # 3. Setup Global State for Callbacks
+    global current_env, human_player_instance, ai_player_instance, current_player_is_human
+    current_env = env
+    human_player_instance = human
+    ai_player_instance = ai_player
+    current_player_is_human = human_starts
+
+    # 4. Init OpenGL
+    if not bool(glutInit):
+        raise RuntimeError("GLUT is not available. Please ensure freeglut3-dev is installed.")
+    glutInit(sys.argv)
+    glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH)
+    glutInitWindowSize(800, 800)
+    glutCreateWindow(b"Cublino Contra 3D")
+    
+    glEnable(GL_DEPTH_TEST)
+    glEnable(GL_LIGHTING)
+    glEnable(GL_LIGHT0)
+    glEnable(GL_COLOR_MATERIAL)
+
+    glClearColor(0.8, 0.8, 0.8, 1.0) # Light grey background
+
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    gluPerspective(45, 1, 0.1, 100.0) # Field of view, aspect, near, far
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+
+    # Light setup
+    light_position = [10.0, 10.0, 10.0, 1.0]
+    glLightfv(GL_LIGHT0, GL_POSITION, light_position)
+    glLightfv(GL_LIGHT0, GL_DIFFUSE, [1.0, 1.0, 1.0, 1.0])
+    glLightfv(GL_LIGHT0, GL_SPECULAR, [1.0, 1.0, 1.0, 1.0])
+
+    # 5. Define Callbacks
+    def display_callback():
+        global camera_distance, camera_angle_x, camera_angle_y
+
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glLoadIdentity()
+
+        gluLookAt(
+            camera_distance * np.sin(np.radians(camera_angle_y)) * np.cos(np.radians(camera_angle_x)),
+            camera_distance * np.sin(np.radians(camera_angle_x)),
+            camera_distance * np.cos(np.radians(camera_angle_y)) * np.cos(np.radians(camera_angle_x)),
+            3.0, 3.0, 0.0,  # Look at center of the board
+            0.0, 1.0, 0.0   # Up vector
+        )
+
+        # Draw grid
+        glDisable(GL_LIGHTING)
+        glColor3f(0.5, 0.5, 0.5) # Grey lines
+        glLineWidth(2.0)
+        for i in range(8):
+            glBegin(GL_LINES)
+            glVertex3f(i, 0, 0)
+            glVertex3f(i, 7, 0)
+            glEnd()
+            glBegin(GL_LINES)
+            glVertex3f(0, i, 0)
+            glVertex3f(7, i, 0)
+            glEnd()
+        glEnable(GL_LIGHTING)
+
+        # Draw dice
+        for r in range(7):
+            for c in range(7):
+                p, top, south = env.unwrapped.board[r, c]
+                if p != 0:
+                    glPushMatrix()
+                    glTranslatef(c + 0.5, r + 0.5, 0.5) # Center cube on grid square
+                    if p == 1:
+                        glColor3f(1.0, 0.0, 0.0) # Red for P1
+                    else:
+                        glColor3f(0.0, 0.0, 1.0) # Blue for P2
+                    glutSolidCube(0.8)
+                    glPopMatrix()
+
+        # Highlight Selection
+        if human.selected_square:
+            r, c = human.selected_square
+            glPushMatrix()
+            glTranslatef(c + 0.5, r + 0.5, 0.5)
+            glColor3f(0.0, 1.0, 0.0) # Green
+            glutWireCube(0.9)
+            glPopMatrix()
+            
+        # Highlight Legal Moves
+        if human.legal_moves:
+            for r, c, d in human.legal_moves:
+                glPushMatrix()
+                glTranslatef(c + 0.5, r + 0.5, 0.5)
+                glColor4f(0.0, 1.0, 0.0, 0.3) # Green transparent
+                glutSolidCube(0.9)
+                glPopMatrix()
+
+        glutSwapBuffers()
+
+    def mouse_click(button, state, x, y):
+        global current_player_is_human # Declare global for assignment
+        if not current_player_is_human or button != GLUT_LEFT_BUTTON or state != GLUT_DOWN:
+            return
+
+        # Get current projection and modelview matrices
+        modelview_matrix = glGetDoublev(GL_MODELVIEW_MATRIX)
+        projection_matrix = glGetDoublev(GL_PROJECTION_MATRIX)
+        viewport_matrix = glGetIntegerv(GL_VIEWPORT)
+
+        # Unproject mouse coordinates to world coordinates
+        winX = float(x)
+        winY = float(viewport_matrix[3] - y) # Invert Y-axis
+
+        # Get 3D world coordinates for near and far clipping planes
+        try:
+            near_point = gluUnProject(winX, winY, 0.0, modelview_matrix, projection_matrix, viewport_matrix)
+            far_point = gluUnProject(winX, winY, 1.0, modelview_matrix, projection_matrix, viewport_matrix)
+        except Exception:
+            return
+
+        # Ray direction
+        ray_dir = np.array(far_point) - np.array(near_point)
+        norm = np.linalg.norm(ray_dir)
+        if norm == 0: return
+        ray_dir = ray_dir / norm
+        ray_origin = np.array(near_point)
+
+        # Intersection with Z=0 plane (board)
+        if ray_dir[2] == 0: return
+        t = -ray_origin[2] / ray_dir[2]
         
-        current_player_idx = env.unwrapped.current_player
-        player = players[current_player_idx]
+        if t < 0: # Intersection is behind camera
+            human_player_instance.selected_square = None
+            human_player_instance.legal_moves = []
+            glutPostRedisplay()
+            return
+
+        intersect_point = ray_origin + t * ray_dir
+        board_x, board_y = int(intersect_point[0]), int(intersect_point[1])
+
+        if not (0 <= board_x < 7 and 0 <= board_y < 7):
+            human_player_instance.selected_square = None
+            human_player_instance.legal_moves = []
+            glutPostRedisplay()
+            return
+
+        # Check if clicked on own piece
+        if current_env.unwrapped.board[board_y, board_x, 0] == human_player_instance.player:
+            human_player_instance.selected_square = (board_y, board_x)
+            human_player_instance.legal_moves = []
+            # Calculate legal moves for this piece
+            for d in range(4):
+                dr, dc = 0, 0
+                if d == 0: dr = 1  # North (Row + 1)
+                elif d == 1: dc = 1 # East (Col + 1)
+                elif d == 2: dr = -1 # South (Row - 1)
+                elif d == 3: dc = -1 # West (Col - 1)
+                
+                tr, tc = board_y + dr, board_x + dc
+                if 0 <= tr < 7 and 0 <= tc < 7 and current_env.unwrapped.board[tr, tc, 0] == 0:
+                    human_player_instance.legal_moves.append((tr, tc, d))
+
+        elif human_player_instance.selected_square:
+            # Check if clicked on a legal target
+            for tr, tc, d in human_player_instance.legal_moves:
+                if tr == board_y and tc == board_x:
+                    # Execute move
+                    sr, sc = human_player_instance.selected_square
+                    action = (sr * 7 + sc) * 4 + d
+                    human_player_instance.pending_action = action
+                    human_player_instance.selected_square = None
+                    human_player_instance.legal_moves = []
+                    game_loop_idle() # Process the move immediately
+                    break
+            else:
+                # Not a legal target, deselect
+                human_player_instance.selected_square = None
+                human_player_instance.legal_moves = []
+        
+        glutPostRedisplay()
+
+    def keyboard_callback(key, x, y):
+        global camera_distance, camera_angle_x, camera_angle_y # Declare global for assignment
+        if key == b'w':
+            camera_distance -= 0.5
+        elif key == b's':
+            camera_distance += 0.5
+        elif key == b'a':
+            camera_angle_y -= 5.0
+        elif key == b'd':
+            camera_angle_y += 5.0
+        elif key == b'q': # Rotate camera up
+            camera_angle_x += 5.0
+            if camera_angle_x > 89.0: camera_angle_x = 89.0
+        elif key == b'e': # Rotate camera down
+            camera_angle_x -= 5.0
+            if camera_angle_x < 1.0: camera_angle_x = 1.0
+        
+        glutPostRedisplay()
+
+    def game_loop_idle():
+        global current_player_is_human, last_frame_time # Declare global for assignment
+        
+        current_time = time.time()
+        delta_time = current_time - last_frame_time
+        last_frame_time = current_time
+
+        # Avoid busy-waiting too much by introducing a small sleep
+        if delta_time < 1/60.0: # Cap at 60 FPS
+            time.sleep(1/60.0 - delta_time)
+
+        current_player_idx = current_env.unwrapped.current_player
+        player = human_player_instance if current_player_idx == human_player_instance.player else ai_player_instance
         
         if isinstance(player, HumanPlayer):
-            # print("Your turn!")
-            action = player.get_action(env)
+            current_player_is_human = True
+            action = player.get_action(current_env) # Non-blocking call
         else:
-            print("AI is thinking...")
-            action = player.get_action(env)
-        
-        ai_player.mcts.update_with_move(action)
+            current_player_is_human = False
+            # print("AI is thinking...") # Reduced verbosity
+            action = player.get_action(current_env)
 
-        obs, reward, terminated, truncated, info = env.step(action)
-        
-        if terminated:
-            render_game(env)
-            if isinstance(player, HumanPlayer):
-                print("You win!")
-            else:
-                print("AI wins!")
-            done = True
-            pygame.time.wait(3000)
-        elif truncated:
-            render_game(env)
-            print("Draw!")
-            done = True
-            pygame.time.wait(3000)
+        if action is not None:
+            ai_player_instance.mcts.update_with_move(action)
+
+            obs, reward, terminated, truncated, info = current_env.step(action)
+            
+            if terminated:
+                print(f"Game Over. Winner: {current_env.unwrapped.current_player}")
+                glutLeaveMainLoop()
+            elif truncated:
+                print("Game Over. Draw!")
+                glutLeaveMainLoop()
+            
+            glutPostRedisplay() # Redraw scene after move
+
+    glutDisplayFunc(display_callback)
+    glutMouseFunc(mouse_click)
+    glutKeyboardFunc(keyboard_callback)
+    glutIdleFunc(game_loop_idle)
+
+    glutMainLoop()
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

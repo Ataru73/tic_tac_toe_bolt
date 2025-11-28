@@ -193,23 +193,23 @@ class CublinoContraEnv(gym.Env):
         # Note: Resolutions are simultaneous based on board state BEFORE any removals.
         dice_to_remove = []
         for r, c, defender_neighbors in contested_dice:
-            # r, c is the Defender (Opponent)
-            # Attacker is self.current_player
-            
-            # Defender Total = Defender Die Value + Sum(Defender's Friendly Neighbors)
             defender_die_val = self.board[r, c, 1]
-            # defender_neighbors = self._get_neighbors(r, c) # Already have this
-            defender_friendly_sum = sum(self.board[nr, nc, 1] for nr, nc in defender_neighbors if self.board[nr, nc, 0] == opponent)
+            
+            # FIX: Calculate sums based on current board state, do not modify yet
+            defender_friendly_sum = sum(self.board[nr, nc, 1] 
+                                      for nr, nc in defender_neighbors 
+                                      if self.board[nr, nc, 0] == opponent)
+            
+            attacker_sum = sum(self.board[nr, nc, 1] 
+                             for nr, nc in defender_neighbors 
+                             if self.board[nr, nc, 0] == self.current_player)
+            
             defender_total = defender_die_val + defender_friendly_sum
             
-            # Attacker Total = Sum(Attacker's Neighbors around Defender)
-            attacker_sum = sum(self.board[nr, nc, 1] for nr, nc in defender_neighbors if self.board[nr, nc, 0] == self.current_player)
-            
-            # Rule: If Defender Total < Attacker Total, Defender dies.
             if defender_total < attacker_sum:
                 dice_to_remove.append((r, c))
                 
-        # Remove dice
+        # FIX: Apply removals after all calculations are done
         for r, c in dice_to_remove:
             self.board[r, c] = [0, 0, 0]
 

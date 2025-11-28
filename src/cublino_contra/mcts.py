@@ -59,7 +59,15 @@ class MCTS:
         while not node.is_leaf():
             action, node = node.select(self._c_puct)
             obs, reward, terminated, truncated, info = state.step(action)
-            
+            if terminated or truncated:
+                # FIX: Use ground truth immediately
+                if reward != 0:
+                    # If reward is 1 (Win for parent), leaf stores 1.0
+                    leaf_value = 1.0 
+                else:
+                    leaf_value = 0.0
+                node.update_recursive(-leaf_value)
+                return            
 
 
         # 2. Expansion and Evaluation

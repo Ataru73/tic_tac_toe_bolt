@@ -616,6 +616,9 @@ public:
             TreeNode* node = root.get();
             CublinoState state = root_state.copy();
             std::vector<TreeNode*> path;
+
+            // FIX: Apply VL to root immediately so it can be reverted later
+            node->apply_virtual_loss(); 
             path.push_back(node);
             
             bool term = false;
@@ -680,20 +683,7 @@ public:
                 if (terminal_rewards[i] == 0) {
                      value = 0.0;
                 } else {
-                     // Winner is player who moved to reach this state.
-                     // Leaf stores value for PARENT (who moved).
-                     // So we want +1.0 for Parent.
-                     // We pass value `v` to `update_recursive`.
-                     // `node->update(v)`. `parent->update_recursive(-v)`.
-                     // So if we want Parent to have +1, we pass -1 to Parent.
-                     // So `node->update` gets +1?
-                     // Wait. 
-                     // My logic: `update_recursive(-leaf_value)`.
-                     // If I pass `-1.0` to `update_recursive`:
-                     // `node` gets -1. `parent` gets +1.
-                     // This is what we want for "Parent won".
-                     // So value = -1.0.
-                     value = -1.0;
+                     value = 1.0;
                 }
             } else {
                 // Find index in batch

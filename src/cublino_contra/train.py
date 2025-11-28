@@ -26,99 +26,84 @@ except ImportError:
 
 def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_games_to_play_per_worker):
     """ Worker function for parallel self-play """
-    env = CublinoContraEnv()
-    
-    use_cpp = True
     try:
-        mcts = MCTS_CPP(model_path, c_puct, n_playout, device_str)
+        env = CublinoContraEnv()
+        
+        use_cpp = True
+        try:
+            mcts = MCTS_CPP(model_path, c_puct, n_playout, device_str)
+        except Exception as e:
+            print(f"Worker failed to use C++ MCTS: {e}. Falling back to Python MCTS.")
+            use_cpp = False
+            device = torch.device(device_str)
+            # Load model
+            policy_value_net = PolicyValueNet(board_size=7).to(device)
+            policy_value_net.load_state_dict(torch.load(model_path, map_location=device))
+            policy_value_net.eval()
+            
+            def policy_value_fn(state):
+                # state is the env
+                legal_actions = state.get_legal_actions()
+                
+                board = state.board
+                # Convert to tensor: (1, 3, 7, 7)
+                board_tensor = torch.FloatTensor(board).permute(2, 0, 1).unsqueeze(0).to(device)
+                
+                with torch.no_grad():
+                    log_act_probs, value = policy_value_net(board_tensor)
+                    act_probs = np.exp(log_act_probs.cpu().numpy().flatten())
+                    
+                return zip(legal_actions, act_probs[legal_actions]), value.item()
+                
+            mcts = MCTS(policy_value_fn, c_puct, n_playout)
+
+        all_play_data = []
+        worker_game_stats = {1: 0, -1: 0, 0: 0} # 1: P1 wins, -1: P2 wins, 0: Draws
+    
+        for _ in range(num_games_to_play_per_worker):
+            env.reset()
+            mcts.update_with_move(-1) # Reset MCTS tree
+    
+            states, mcts_probs, current_players = [], [], []
+            
+            while True:
+                # Store state as (3, 7, 7) for training
+                board = env.board
+                state_tensor = np.transpose(board, (2, 0, 1)) # (3, 7, 7)
+                states.append(state_tensor)
+                
+                acts, probs = mcts.get_move_probs(env, temp=temp)
+                
+                prob_vec = np.zeros(196) # 7*7*4
+                for a, p in zip(acts, probs):
+                    prob_vec[a] = p
+                mcts_probs.append(prob_vec)
+                current_players.append(env.current_player)
+                
+                move = np.random.choice(acts, p=probs)
+                mcts.update_with_move(move)
+                
+                obs, reward, terminated, truncated, info = env.step(move)
+                
+                if terminated or truncated:
+                    winner_val = info.get('winner', 0)
+                    worker_game_stats[winner_val] += 1
+                    
+                    winner_z = np.zeros(len(current_players))
+                    if winner_val != 0:
+                        winner_z[np.array(current_players) == winner_val] = 1.0
+                        winner_z[np.array(current_players) != winner_val] = -1.0
+                    
+                    all_play_data.append(list(zip(states, mcts_probs, winner_z)))
+                    break
+    
+        return all_play_data, worker_game_stats
     except Exception as e:
-        print(f"Worker failed to use C++ MCTS: {e}. Falling back to Python MCTS.")
-        use_cpp = False
-        device = torch.device(device_str)
-        # Load model
-        policy_value_net = PolicyValueNet(board_size=7).to(device)
-        policy_value_net.load_state_dict(torch.load(model_path, map_location=device))
-        policy_value_net.eval()
-        
-        def policy_value_fn(state):
-            # state is the env
-            legal_actions = state.get_legal_actions()
-            
-            board = state.board
-            # Convert to tensor: (1, 3, 7, 7)
-            board_tensor = torch.FloatTensor(board).permute(2, 0, 1).unsqueeze(0).to(device)
-            
-            with torch.no_grad():
-                log_act_probs, value = policy_value_net(board_tensor)
-                act_probs = np.exp(log_act_probs.cpu().numpy().flatten())
-                
-            return zip(legal_actions, act_probs[legal_actions]), value.item()
-            
-        mcts = MCTS(policy_value_fn, c_puct, n_playout)
-
-    all_play_data = []
-    for _ in range(num_games_to_play_per_worker):
-        env.reset()
-        mcts.update_with_move(-1) # Reset MCTS tree
-
-        states, mcts_probs, current_players = [], [], []
-        
-        while True:
-            # Store state as (3, 7, 7) for training
-            board = env.board
-            state_tensor = np.transpose(board, (2, 0, 1)) # (3, 7, 7)
-            states.append(state_tensor)
-            
-            acts, probs = mcts.get_move_probs(env, temp=temp)
-            
-            prob_vec = np.zeros(196) # 7*7*4
-            for a, p in zip(acts, probs):
-                prob_vec[a] = p
-            mcts_probs.append(prob_vec)
-            current_players.append(env.current_player)
-            
-            move = np.random.choice(acts, p=probs)
-            mcts.update_with_move(move)
-            
-            obs, reward, terminated, truncated, info = env.step(move)
-            
-            if terminated or truncated:
-                # Winner is the one who just moved (current_player of the step that caused termination)
-                # Wait, env.step switches turn at the end.
-                # So if terminated, the player who made the move is -env.current_player
-                # But my MCTS implementation handles value from perspective of current player.
-                
-                # Let's look at reward.
-                # If P1 wins, reward is 1.
-                # If P2 wins, reward is 1 (from their perspective? No, env returns 1 if winner found).
-                # Let's check env.py again.
-                # if self.current_player == 1 and target_row == 6: return ..., 1, True, ...
-                # Then switch turn? No, returns immediately.
-                # So if terminated, the current_player (who made the move) is the winner.
-                
-                # In train.py logic:
-                # actual_winner = env.current_player (because env.step returns before switching turn on win)
-                # Wait, let's check env.py carefully.
-                
-                # env.py:
-                # if win condition: return ..., 1, True, ... {"winner": 1}
-                # It does NOT switch turn.
-                # So env.current_player is the winner.
-                
-                winner_val = 0
-                if 'winner' in info:
-                    winner_val = info['winner']
-                
-                winner_z = np.zeros(len(current_players))
-                if winner_val != 0:
-                    winner_z[np.array(current_players) == winner_val] = 1.0
-                    winner_z[np.array(current_players) != winner_val] = -1.0
-                
-                all_play_data.append(list(zip(states, mcts_probs, winner_z)))
-                break
-
-    return all_play_data
-
+        print(f"CRITICAL WORKER ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return empty results to avoid crashing main loop hard, but printed error helps debug
+        return [], {1: 0, -1: 0, 0: 0}
 class MCTSPlayer:
     def __init__(self, policy_value_fn, c_puct=5, n_playout=400, is_selfplay=0):
         self.mcts = MCTS(policy_value_fn, c_puct, n_playout)
@@ -251,7 +236,7 @@ class TrainPipeline:
             for i in range(self.game_batch_num):
                 start_time = time.time()
                 self.collect_selfplay_data(self.play_batch_size)
-                print(f"Batch i:{i+1}, Episode Len:{self.episode_len:.2f}, Time:{time.time()-start_time:.2f}s")
+                print(f"Batch i:{i+1}, Episode Len:{self.episode_len:.2f}, Time:{time.time()-start_time:.2f}s, P1 Wins:{self.batch_game_stats[1]}, P2 Wins:{self.batch_game_stats[-1]}, Draws:{self.batch_game_stats[0]}")
                 
                 if len(self.data_buffer) > self.batch_size:
                     loss, entropy = self.policy_update()
@@ -260,7 +245,9 @@ class TrainPipeline:
                     if (i+1) % self.check_freq == 0:
                         print("Evaluating...")
                         win_cnt = self.evaluate_policy(n_games=10)
-                        print(f"Win/Loss/Draw: {win_cnt[1]}/{win_cnt[-1]}/{win_cnt[0]}")
+                        print(f"Current Policy Wins: {win_cnt[1]}")
+                        print(f"Best Policy Wins: {win_cnt[-1]}")
+                        print(f"Draws: {win_cnt[0]}")
                         
                         win_ratio = 1.0 * (win_cnt[1] + 0.5*win_cnt[0]) / (sum(win_cnt.values()))
                         if win_ratio >= 0.55:
@@ -286,6 +273,7 @@ class TrainPipeline:
         
         self.total_episode_len = 0
         self.collected_games = 0
+        self.batch_game_stats = {1: 0, -1: 0, 0: 0} # {P1 wins, P2 wins, Draws}
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = [
@@ -295,11 +283,15 @@ class TrainPipeline:
             
             for future in concurrent.futures.as_completed(futures):
                 try:
-                    list_of_games = future.result()
+                    list_of_games, worker_game_stats = future.result()
                     for game_steps in list_of_games:
                         self.total_episode_len += len(game_steps)
                         self.collected_games += 1
                         self.data_buffer.extend(game_steps)
+                    
+                    # Aggregate worker stats
+                    for player, count in worker_game_stats.items():
+                        self.batch_game_stats[player] += count
                 except Exception as e:
                     print(f"Worker exception: {e}")
 

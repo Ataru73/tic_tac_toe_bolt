@@ -2,6 +2,10 @@
 name = "tic-tac-toe-bolt"
 version = "0.1.0"
 description = "Infinite Tic Tac Toe Gymnasium Environment with AlphaZero-style AI"
+license = {text = "GPL-2.0"}
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)"
+]
 dependencies = [
     "gymnasium",
     "numpy",

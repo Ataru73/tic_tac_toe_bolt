@@ -167,17 +167,18 @@ class CublinoContraEnv(gym.Env):
                 friendly_count = sum(1 for nr, nc in opp_neighbors if self.board[nr, nc, 0] == self.current_player)
                 
                 if friendly_count >= 2:
-                    contested_dice.append((r, c))
+                    contested_dice.append((r, c, opp_neighbors))
         
         # Resolve each battle
+        # Note: Resolutions are simultaneous based on board state BEFORE any removals.
         dice_to_remove = []
-        for r, c in contested_dice:
+        for r, c, defender_neighbors in contested_dice:
             # r, c is the Defender (Opponent)
             # Attacker is self.current_player
             
             # Defender Total = Defender Die Value + Sum(Defender's Friendly Neighbors)
             defender_die_val = self.board[r, c, 1]
-            defender_neighbors = self._get_neighbors(r, c)
+            # defender_neighbors = self._get_neighbors(r, c) # Already have this
             defender_friendly_sum = sum(self.board[nr, nc, 1] for nr, nc in defender_neighbors if self.board[nr, nc, 0] == opponent)
             defender_total = defender_die_val + defender_friendly_sum
             

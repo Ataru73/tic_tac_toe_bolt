@@ -90,7 +90,30 @@ human_player_instance = None
 ai_player_instance = None
 current_player_is_human = False
 last_frame_time = time.time()
+mouse_right_down = False
+last_mouse_x = 0
+last_mouse_y = 0
 
+# Fixed camera presets for numpad keys (distance, angle_x, angle_y)
+camera_presets = {
+    # Angle X: 0 horizontal, 90 straight down
+    # Angle Y: 0 east (+X), 90 north (+Y), 180 west (-X), 270 south (-Y)
+    # Board is 0,0 (bottom-left) to 6,6 (top-right) in world coordinates.
+    # Front is along +Y (P1 side), Back is along -Y (P2 side).
+    # Left is along -X, Right is along +X.
+
+    b'5': (10.0, 89.0, 45.0),   # Top (looking straight down)
+
+    b'1': (15.0, 30.0, 135.0),  # Front-Left (from P1's side, left)
+    b'3': (15.0, 30.0, 45.0),   # Front-Right (from P1's side, right)
+    b'7': (15.0, 30.0, -135.0), # Back-Left (from P2's side, left)
+    b'9': (15.0, 30.0, -45.0),  # Back-Right (from P2's side, right)
+
+    b'8': (15.0, 30.0, -90.0),  # Back-Center (from P2's side, center)
+    b'2': (15.0, 30.0, 90.0),   # Front-Center (from P1's side, center)
+    b'4': (15.0, 30.0, 180.0),  # Left-Center
+    b'6': (15.0, 30.0, 0.0),    # Right-Center
+}
 
 def run_game(model_path=None, human_starts=True, difficulty=20):
     # 1. Initialize Environment
@@ -178,6 +201,105 @@ def run_game(model_path=None, human_starts=True, difficulty=20):
     glLightfv(GL_LIGHT0, GL_DIFFUSE, [1.0, 1.0, 1.0, 1.0])
     glLightfv(GL_LIGHT0, GL_SPECULAR, [1.0, 1.0, 1.0, 1.0])
 
+    # Helper for die logic
+    _val_to_vec = {
+        1: np.array([0, 0, 1]),
+        6: np.array([0, 0, -1]),
+        2: np.array([0, -1, 0]), 
+        5: np.array([0, 1, 0]),  
+        3: np.array([1, 0, 0]),  
+        4: np.array([-1, 0, 0]) 
+    }
+    _vec_to_val = {tuple(v): k for k, v in _val_to_vec.items()}
+
+    def draw_text_centered(text):
+        glPushMatrix()
+        scale = 0.003
+        glScalef(scale, scale, scale)
+        w = 0
+        for c in text:
+            w += glutStrokeWidth(GLUT_STROKE_ROMAN, ord(c))
+        # 119.05 is the height of GLUT_STROKE_ROMAN
+        glTranslatef(-w/2, -119.05/2, 0)
+        glLineWidth(3.0)
+        for c in text:
+            glutStrokeCharacter(GLUT_STROKE_ROMAN, ord(c))
+        glPopMatrix()
+
+    def draw_die(p, top, south):
+        # Calculate other faces
+        v_top = _val_to_vec[top]
+        v_south = _val_to_vec[south]
+        v_east = np.cross(v_top, v_south)
+        
+        east = _vec_to_val.get(tuple(v_east), 0)
+        north = 7 - south
+        west = 7 - east
+        bottom = 7 - top
+        
+        # Draw Cube
+        if p == 1:
+            glColor3f(0.8, 0.2, 0.2) # Redish
+        else:
+            glColor3f(0.2, 0.2, 0.8) # Bluish
+        glutSolidCube(0.8)
+        
+        # Draw Numbers
+        glColor3f(1.0, 1.0, 1.0) # White text
+        # glDisable(GL_LIGHTING) # Optional: Make text self-luminous
+        
+        dist = 0.41
+        
+        # Top (+Z)
+        glPushMatrix()
+        glTranslatef(0, 0, dist)
+        draw_text_centered(str(top))
+        glPopMatrix()
+        
+        # Bottom (-Z)
+        glPushMatrix()
+        glTranslatef(0, 0, -dist)
+        glRotatef(180, 1, 0, 0)
+        draw_text_centered(str(bottom))
+        glPopMatrix()
+        
+        # South (-Y)
+        glPushMatrix()
+        glTranslatef(0, -dist, 0)
+        glRotatef(90, 1, 0, 0)
+        draw_text_centered(str(south))
+        glPopMatrix()
+        
+        # North (+Y)
+        glPushMatrix()
+        glTranslatef(0, dist, 0)
+        glRotatef(-90, 1, 0, 0)
+        glRotatef(180, 0, 0, 1) # Flip so it's upright relative to board? 
+        # Actually standard: Text up is +Y (World Z).
+        # Rotating -90 around X: Y -> Z. 
+        # So text up (local Y) becomes world Z. This is correct.
+        draw_text_centered(str(north))
+        glPopMatrix()
+        
+        # East (+X)
+        glPushMatrix()
+        glTranslatef(dist, 0, 0)
+        glRotatef(90, 0, 1, 0)
+        glRotatef(90, 0, 0, 1) # Adjust orientation
+        draw_text_centered(str(east))
+        glPopMatrix()
+        
+        # West (-X)
+        glPushMatrix()
+        glTranslatef(-dist, 0, 0)
+        glRotatef(-90, 0, 1, 0)
+        glRotatef(-90, 0, 0, 1)
+        draw_text_centered(str(west))
+        glPopMatrix()
+
+        # glEnable(GL_LIGHTING)
+
+
     # 5. Define Callbacks
     def display_callback():
         global camera_distance, camera_angle_x, camera_angle_y
@@ -215,11 +337,7 @@ def run_game(model_path=None, human_starts=True, difficulty=20):
                 if p != 0:
                     glPushMatrix()
                     glTranslatef(c + 0.5, r + 0.5, 0.5) # Center cube on grid square
-                    if p == 1:
-                        glColor3f(1.0, 0.0, 0.0) # Red for P1
-                    else:
-                        glColor3f(0.0, 0.0, 1.0) # Blue for P2
-                    glutSolidCube(0.8)
+                    draw_die(p, top, south)
                     glPopMatrix()
 
         # Highlight Selection
@@ -243,7 +361,19 @@ def run_game(model_path=None, human_starts=True, difficulty=20):
         glutSwapBuffers()
 
     def mouse_click(button, state, x, y):
-        global current_player_is_human # Declare global for assignment
+        global current_player_is_human, mouse_right_down, last_mouse_x, last_mouse_y # Declare global for assignment
+        
+        # Camera control with Right Mouse Button
+        if button == GLUT_RIGHT_BUTTON:
+            if state == GLUT_DOWN:
+                mouse_right_down = True
+                last_mouse_x = x
+                last_mouse_y = y
+            elif state == GLUT_UP:
+                mouse_right_down = False
+            return
+
+        # Game interaction with Left Mouse Button
         if not current_player_is_human or button != GLUT_LEFT_BUTTON or state != GLUT_DOWN:
             return
 
@@ -341,7 +471,29 @@ def run_game(model_path=None, human_starts=True, difficulty=20):
             camera_angle_x -= 5.0
             if camera_angle_x < 1.0: camera_angle_x = 1.0
         
+        elif key in camera_presets:
+            camera_distance, camera_angle_x, camera_angle_y = camera_presets[key]
+
         glutPostRedisplay()
+
+    def mouse_motion(x, y):
+        global mouse_right_down, last_mouse_x, last_mouse_y, camera_angle_x, camera_angle_y
+        
+        if mouse_right_down:
+            dx = x - last_mouse_x
+            dy = y - last_mouse_y
+            
+            camera_angle_y += dx * 0.5
+            camera_angle_x += dy * 0.5
+            
+            # Clamp camera_angle_x
+            if camera_angle_x > 89.0: camera_angle_x = 89.0
+            if camera_angle_x < 1.0: camera_angle_x = 1.0
+            
+            last_mouse_x = x
+            last_mouse_y = y
+            
+            glutPostRedisplay()
 
     def game_loop_idle():
         global current_player_is_human, last_frame_time # Declare global for assignment
@@ -381,6 +533,7 @@ def run_game(model_path=None, human_starts=True, difficulty=20):
 
     glutDisplayFunc(display_callback)
     glutMouseFunc(mouse_click)
+    glutMotionFunc(mouse_motion)
     glutKeyboardFunc(keyboard_callback)
     glutIdleFunc(game_loop_idle)
 

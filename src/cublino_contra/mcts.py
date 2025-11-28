@@ -124,6 +124,6 @@ class MCTS_CPP:
         
         # Convert board (7, 7, 3) to numpy array then to C++
         # pybind11 handles numpy -> py::array_t automatically
-        cpp_state.set_state_from_python(env.board, env.current_player)
+        cpp_state.set_state_from_python(env.unwrapped.board, env.unwrapped.current_player)
         
         return cpp_state

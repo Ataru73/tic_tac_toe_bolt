@@ -8,26 +8,30 @@
 *   **Core Logic**: Implemented as a custom Gymnasium environment (`TicTacToeBolt-v0`).
 *   **AI Architecture**: AlphaZero (ResNet/CNN backbone with dual Policy/Value heads + MCTS).
 *   **Performance**: Includes a C++ extension (`_mcts_cpp`) for high-performance MCTS during inference/training, supporting both CPU and CUDA.
+*   **Training Features**: Supports "Force Asymmetry" to train robust agents by introducing random opponent moves during evaluation.
 
 ## Directory Structure
 
 *   `src/tic_tac_toe_bolt/`: Main source code.
-    *   `env.py`: Gymnasium environment implementation.
+    *   `env.py`: Gymnasium environment implementation (supports ASCII rendering).
     *   `model.py`: PyTorch Policy/Value Neural Network (CNN).
     *   `mcts.py`: Pure Python MCTS implementation.
     *   `mcts_cpp/`: C++ source for the optimized MCTS extension.
     *   `train.py`: Main training loop (Self-Play -> Optimize -> Evaluate).
-    *   `play.py`: CLI script for human vs. AI play.
+    *   `play.py`: CLI script for human vs. AI play (supports difficulty levels).
 *   `tests/`: Unit and integration tests.
     *   `test_mechanics.py`: Verifies game rules (infinite mechanic, win conditions).
     *   `test_model.py`: Verifies NN architecture and forward pass.
     *   `test_mcts_cpp.py`: Verifies C++ MCTS bindings.
     *   `performance_benchmark.py`: Benchmarks Python vs C++ MCTS performance.
 *   `play_match.py`: Script to pit two models against each other.
+*   `extract_model.py`: Utility to extract model state dictionaries from checkpoints.
 
 ## Development & Usage
 
 ### 1. Installation
+
+This project is licensed under the GPL-2.0 License.
 
 The project uses `setuptools` and builds a C++ extension.
 
@@ -45,7 +49,11 @@ pip install .
 Start the AlphaZero training loop:
 
 ```bash
+# Standard training
 python3 src/tic_tac_toe_bolt/train.py
+
+# Train with Force Asymmetry (10% random opponent moves during eval)
+python3 src/tic_tac_toe_bolt/train.py --force_asymmetry 0.1
 ```
 *   Generates checkpoints (e.g., `current_policy_50.pth`).
 *   The training script automatically detects if CUDA is available and utilizes the C++ MCTS extension on the appropriate device.
@@ -57,8 +65,8 @@ python3 src/tic_tac_toe_bolt/train.py
 # Play against random/untrained
 python3 src/tic_tac_toe_bolt/play.py
 
-# Play against a specific model
-python3 src/tic_tac_toe_bolt/play.py --model current_policy_50.pth --ai_starts
+# Play against a specific model with difficulty adjustment (1-20, default 20)
+python3 src/tic_tac_toe_bolt/play.py --model current_policy_50.pth --ai_starts --difficulty 10
 ```
 
 **Model vs. Model:**
@@ -66,7 +74,15 @@ python3 src/tic_tac_toe_bolt/play.py --model current_policy_50.pth --ai_starts
 python3 play_match.py --model1 current_policy_50.pth --model2 current_policy_100.pth --n_games 100
 ```
 
-### 4. Testing
+### 4. Model Extraction
+
+Extract the model state dictionary from a full training checkpoint:
+
+```bash
+python3 extract_model.py checkpoint.pth --output model.pth
+```
+
+### 5. Testing
 
 Run verification scripts to ensure game logic and model integrity:
 

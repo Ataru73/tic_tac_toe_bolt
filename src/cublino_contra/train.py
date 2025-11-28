@@ -13,34 +13,40 @@ import argparse
 import multiprocessing
 
 from src.cublino_contra.model import PolicyValueNet
-from src.cublino_contra.mcts import MCTS
+from src.cublino_contra.mcts import MCTS, MCTS_CPP
 from src.cublino_contra.env import CublinoContraEnv
 
 def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_games_to_play_per_worker):
     """ Worker function for parallel self-play """
     env = CublinoContraEnv()
     
-    device = torch.device(device_str)
-    # Load model
-    policy_value_net = PolicyValueNet(board_size=7).to(device)
-    policy_value_net.load_state_dict(torch.load(model_path, map_location=device))
-    policy_value_net.eval()
-    
-    def policy_value_fn(state):
-        # state is the env
-        legal_actions = state.get_legal_actions()
+    use_cpp = True
+    try:
+        mcts = MCTS_CPP(model_path, c_puct, n_playout, device_str)
+    except Exception as e:
+        print(f"Worker failed to use C++ MCTS: {e}. Falling back to Python MCTS.")
+        use_cpp = False
+        device = torch.device(device_str)
+        # Load model
+        policy_value_net = PolicyValueNet(board_size=7).to(device)
+        policy_value_net.load_state_dict(torch.load(model_path, map_location=device))
+        policy_value_net.eval()
         
-        board = state.board
-        # Convert to tensor: (1, 3, 7, 7)
-        board_tensor = torch.FloatTensor(board).permute(2, 0, 1).unsqueeze(0).to(device)
-        
-        with torch.no_grad():
-            log_act_probs, value = policy_value_net(board_tensor)
-            act_probs = np.exp(log_act_probs.cpu().numpy().flatten())
+        def policy_value_fn(state):
+            # state is the env
+            legal_actions = state.get_legal_actions()
             
-        return zip(legal_actions, act_probs[legal_actions]), value.item()
-        
-    mcts = MCTS(policy_value_fn, c_puct, n_playout)
+            board = state.board
+            # Convert to tensor: (1, 3, 7, 7)
+            board_tensor = torch.FloatTensor(board).permute(2, 0, 1).unsqueeze(0).to(device)
+            
+            with torch.no_grad():
+                log_act_probs, value = policy_value_net(board_tensor)
+                act_probs = np.exp(log_act_probs.cpu().numpy().flatten())
+                
+            return zip(legal_actions, act_probs[legal_actions]), value.item()
+            
+        mcts = MCTS(policy_value_fn, c_puct, n_playout)
 
     all_play_data = []
     for _ in range(num_games_to_play_per_worker):
@@ -262,7 +268,9 @@ class TrainPipeline:
 
     def collect_selfplay_data(self, n_games=1):
         model_path = "temp_model_cublino.pt"
-        torch.save(self.policy_value_net.state_dict(), model_path) # Save state dict for workers
+        # Save as TorchScript for C++ MCTS
+        script_model = torch.jit.script(self.policy_value_net)
+        script_model.save(model_path)
         
         device_str = str(self.device)
         num_workers = (n_games + self.num_games_per_worker - 1) // self.num_games_per_worker

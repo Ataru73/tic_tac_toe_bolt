@@ -98,3 +98,32 @@ class MCTS:
             self._root._parent = None
         else:
             self._root = TreeNode(None, 1.0)
+
+try:
+    from cublino_contra import _mcts_cpp
+except ImportError:
+    _mcts_cpp = None
+
+class MCTS_CPP:
+    def __init__(self, model_path, c_puct=5, n_playout=2000, device="cpu"):
+        if _mcts_cpp is None:
+            raise ImportError("C++ extension not found. Please build it first.")
+        self._mcts = _mcts_cpp.MCTS(model_path, c_puct, n_playout, str(device))
+    
+    def get_move_probs(self, env, temp=1e-3):
+        # Convert env state to C++ state
+        cpp_state = self._convert_env_to_cpp_state(env)
+        acts, probs = self._mcts.get_move_probs(cpp_state, temp)
+        return acts, probs
+
+    def update_with_move(self, last_move):
+        self._mcts.update_with_move(last_move)
+
+    def _convert_env_to_cpp_state(self, env):
+        cpp_state = _mcts_cpp.CublinoState()
+        
+        # Convert board (7, 7, 3) to numpy array then to C++
+        # pybind11 handles numpy -> py::array_t automatically
+        cpp_state.set_state_from_python(env.board, env.current_player)
+        
+        return cpp_state

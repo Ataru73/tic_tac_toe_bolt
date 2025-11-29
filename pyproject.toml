@@ -10,6 +10,8 @@ dependencies = [
     "gymnasium",
     "numpy",
     "pygame",
+    "PyOpenGL",
+    "PyOpenGL_accelerate",
     "torch"
 ]
 

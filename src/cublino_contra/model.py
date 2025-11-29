@@ -45,6 +45,10 @@ class PolicyValueNet(nn.Module):
 
     def forward(self, x):
         # Input: (N, 3, 7, 7)
+
+        # Normalize input
+        x = x / 6.0
+        
         x = F.relu(self.bn_input(self.conv_input(x)))
         
         for block in self.res_blocks:

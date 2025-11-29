@@ -266,6 +266,7 @@ class TrainPipeline:
         # Save as TorchScript for C++ MCTS
         script_model = torch.jit.script(self.policy_value_net)
         script_model.save(model_path)
+        time.sleep(0.1) # Small safety buffer
         
         device_str = str(self.device)
         num_workers = (n_games + self.num_games_per_worker - 1) // self.num_games_per_worker

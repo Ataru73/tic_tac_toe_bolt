@@ -35,7 +35,7 @@ public:
     int current_player;
     int board_size = 7;
     int step_count = 0;
-    int max_steps = 100;
+    int max_steps = 300;
     std::map<size_t, int> history; // Optimized history using hash
 
     CublinoState() {
@@ -125,6 +125,10 @@ public:
         if (row < 0 || row >= 7 || col < 0 || col >= 7) return {-10, true};
         if (board[row][col][0] != current_player) return {-10, true};
 
+        // Backward move validation
+        if (current_player == 1 && direction == 2) return {-10, true}; // P1 cannot move South
+        if (current_player == -1 && direction == 0) return {-10, true}; // P2 cannot move North
+
         int dr = 0, dc = 0;
         if (direction == 0) dr = 1;      // North
         else if (direction == 1) dc = 1; // East
@@ -154,18 +158,17 @@ public:
         board[target_row][target_col][1] = new_top;
         board[target_row][target_col][2] = new_south;
         
-        // Update State History
-        state_history.push_back(board);
-        if (state_history.size() > 4) {
-            state_history.pop_front();
-        }
-
-        // Check Win
         if (current_player == 1 && target_row == 6) return {1, true};
         if (current_player == -1 && target_row == 0) return {1, true};
 
         // Resolve Battles
         resolve_battles(target_row, target_col);
+
+        // Update State History
+        state_history.push_back(board);
+        if (state_history.size() > 4) {
+            state_history.pop_front();
+        }
 
         // Switch Turn
         current_player *= -1;
@@ -296,16 +299,6 @@ public:
             board[dice_to_remove[i].first][dice_to_remove[i].second][0] = 0;
             board[dice_to_remove[i].first][dice_to_remove[i].second][1] = 0;
             board[dice_to_remove[i].first][dice_to_remove[i].second][2] = 0;
-        }
-        
-        // Also update history with battle results?
-        // step() updates history AFTER resolve_battles in my logic above?
-        // Wait, I pushed to history BEFORE resolve_battles in step().
-        // FIX: Should push to history AFTER all modifications.
-        // Let's fix step().
-        // Actually, I can just update the back of history if I already pushed.
-        if (remove_count > 0) {
-             state_history.back() = board;
         }
     }
 

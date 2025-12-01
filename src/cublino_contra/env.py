@@ -128,9 +128,6 @@ class CublinoContraEnv(gym.Env):
         self.board[row, col] = [0, 0, 0]
         self.board[target_row, target_col] = [self.current_player, new_top, new_south]
         
-        # Update state history
-        self.state_history.append(self.board.copy())
-
         # Check Win Condition (Reached opponent's back row)
         # P1 target: Row 6
         # P2 target: Row 0
@@ -141,6 +138,9 @@ class CublinoContraEnv(gym.Env):
 
         # Resolve Battles
         self._resolve_battles(target_row, target_col)
+        
+        # Update state history
+        self.state_history.append(self.board.copy())
 
         # Switch Turn
         self.current_player *= -1

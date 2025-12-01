@@ -95,26 +95,28 @@ last_frame_time = time.time()
 mouse_right_down = False
 last_mouse_x = 0
 last_mouse_y = 0
+game_over = False
 
 # Fixed camera presets for numpad keys (distance, angle_x, angle_y)
 camera_presets = {
     # Angle X: 0 horizontal, 90 straight down
-    # Angle Y: 0 east (+X), 90 north (+Y), 180 west (-X), 270 south (-Y)
-    # Board is 0,0 (bottom-left) to 6,6 (top-right) in world coordinates.
-    # Front is along +Y (P1 side), Back is along -Y (P2 side).
+    # Angle Y: 0 Front (+Z), 90 Right (+X), 180 Back (-Z), 270 Left (-X)
+    # Board is 0,0 (P1-Left) to 6,6 (P2-Right) in object coordinates.
+    # After rotation: P1 is at Z=0, P2 is at Z=-6.
+    # Front is along +Z (looking at P1), Back is along -Z (looking at P2).
     # Left is along -X, Right is along +X.
 
-    b'5': (10.0, 89.0, 45.0),   # Top (looking straight down)
+    b'5': (10.0, 89.0, 0.0),   # Top (looking straight down)
 
-    b'1': (15.0, 30.0, 135.0),  # Front-Left (from P1's side, left)
-    b'3': (15.0, 30.0, 45.0),   # Front-Right (from P1's side, right)
-    b'7': (15.0, 30.0, -135.0), # Back-Left (from P2's side, left)
-    b'9': (15.0, 30.0, -45.0),  # Back-Right (from P2's side, right)
+    b'1': (15.0, 30.0, -45.0),  # Front-Left
+    b'3': (15.0, 30.0, 45.0),   # Front-Right
+    b'7': (15.0, 30.0, -135.0), # Back-Left
+    b'9': (15.0, 30.0, 135.0),  # Back-Right
 
-    b'8': (15.0, 30.0, -90.0),  # Back-Center (from P2's side, center)
-    b'2': (15.0, 30.0, 90.0),   # Front-Center (from P1's side, center)
-    b'4': (15.0, 30.0, 180.0),  # Left-Center
-    b'6': (15.0, 30.0, 0.0),    # Right-Center
+    b'8': (15.0, 30.0, 180.0),  # Back (North)
+    b'2': (15.0, 30.0, 0.0),    # Front (South)
+    b'4': (15.0, 30.0, -90.0),  # Left (West)
+    b'6': (15.0, 30.0, 90.0),   # Right (East)
 }
 
 class ReplayPlayer:
@@ -206,10 +208,15 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
         policy_value_net = PolicyValueNet(board_size=7).to(device)
         if model_path and os.path.exists(model_path):
             try:
-                policy_value_net.load_state_dict(torch.load(model_path, map_location=device))
+                checkpoint = torch.load(model_path, map_location=device)
+                if isinstance(checkpoint, dict) and 'policy_value_net' in checkpoint:
+                    policy_value_net.load_state_dict(checkpoint['policy_value_net'])
+                else:
+                    policy_value_net.load_state_dict(checkpoint)
                 print(f"Loaded model from {model_path}")
-            except:
-                 print(f"Could not load state dict from {model_path}. Assuming it is a script model or invalid.")
+            except Exception as e:
+                 print(f"Could not load state dict from {model_path}: {e}")
+                 print("Assuming it is a script model or invalid.")
         elif model_path:
             print(f"Warning: Model path {model_path} does not exist. Using untrained model.")
         else:
@@ -389,9 +396,11 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
             camera_distance * np.sin(np.radians(camera_angle_y)) * np.cos(np.radians(camera_angle_x)),
             camera_distance * np.sin(np.radians(camera_angle_x)),
             camera_distance * np.cos(np.radians(camera_angle_y)) * np.cos(np.radians(camera_angle_x)),
-            3.0, 3.0, 0.0,  # Look at center of the board
+            3.0, 0.0, -3.0,  # Look at center of the board (rotated)
             0.0, 1.0, 0.0   # Up vector
         )
+        
+        glRotatef(-90, 1, 0, 0) # Rotate board to be horizontal
 
         # Draw grid
         glDisable(GL_LIGHTING)
@@ -552,6 +561,9 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
         elif key in camera_presets:
             camera_distance, camera_angle_x, camera_angle_y = camera_presets[key]
 
+        if game_over:
+             glutLeaveMainLoop()
+
         glutPostRedisplay()
 
     def mouse_motion(x, y):
@@ -574,7 +586,11 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
             glutPostRedisplay()
 
     def game_loop_idle():
-        global current_player_is_human, last_frame_time # Declare global for assignment
+        global current_player_is_human, last_frame_time, game_over # Declare global for assignment
+        
+        if game_over:
+            time.sleep(0.1)
+            return
         
         current_time = time.time()
         delta_time = current_time - last_frame_time
@@ -603,10 +619,12 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
             
             if terminated:
                 print(f"Game Over. Winner: {current_env.unwrapped.current_player}")
-                glutLeaveMainLoop()
+                print("Press any key to exit.")
+                game_over = True
             elif truncated:
                 print("Game Over. Draw!")
-                glutLeaveMainLoop()
+                print("Press any key to exit.")
+                game_over = True
             
             glutPostRedisplay() # Redraw scene after move
 

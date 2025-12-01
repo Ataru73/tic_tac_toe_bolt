@@ -93,7 +93,7 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                         winner_z[np.array(current_players) == winner_val] = 1.0
                         winner_z[np.array(current_players) != winner_val] = -1.0
                     else: 
-                        winner_z[:] = -1.0
+                        winner_z[:] = -0.2
                     
                     all_play_data.append(list(zip(states, mcts_probs, winner_z)))
                     break

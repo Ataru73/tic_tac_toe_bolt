@@ -396,7 +396,7 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
             camera_distance * np.sin(np.radians(camera_angle_y)) * np.cos(np.radians(camera_angle_x)),
             camera_distance * np.sin(np.radians(camera_angle_x)),
             camera_distance * np.cos(np.radians(camera_angle_y)) * np.cos(np.radians(camera_angle_x)),
-            3.0, 0.0, -3.0,  # Look at center of the board (rotated)
+            3.5, 0.0, -3.5,   # Look at center of the board (accounting for -90° X rotation)
             0.0, 1.0, 0.0   # Up vector
         )
         

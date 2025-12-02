@@ -208,7 +208,7 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
         policy_value_net = PolicyValueNet(board_size=7).to(device)
         if model_path and os.path.exists(model_path):
             try:
-                checkpoint = torch.load(model_path, map_location=device)
+                checkpoint = torch.load(model_path, map_location=device, weights_only=False)
                 if isinstance(checkpoint, dict) and 'policy_value_net' in checkpoint:
                     policy_value_net.load_state_dict(checkpoint['policy_value_net'])
                 else:

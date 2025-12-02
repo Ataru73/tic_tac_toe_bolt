@@ -1,4 +1,4 @@
-# Tic Tac Toe Bolt
+# Board Game AI
 
 **Tic Tac Toe Bolt** is a reinforcement learning project that implements "Infinite Tic Tac Toe" (where a player can have at most 3 marks, and the oldest disappears on the 4th move) as a Gymnasium environment. It features an AlphaZero-style AI agent trained via self-play and Monte Carlo Tree Search (MCTS).
 

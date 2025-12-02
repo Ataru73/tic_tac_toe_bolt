@@ -71,18 +71,6 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
     
         for game_idx in range(num_games_to_play_per_worker):
             env.reset()
-
-            # --- ADD THIS BLOCK ---
-            # Randomize the opening to break "passive" memorization
-            # Play 0 to 8 random moves (half moves, so 0-4 full turns)
-            num_random_moves = np.random.randint(0, 9) 
-            for _ in range(num_random_moves):
-                legal = env.get_legal_actions()
-                if not legal: break
-                random_action = np.random.choice(legal)
-                env.step(random_action)
-            # ----------------------
-
             mcts.update_with_move(-1) # Reset MCTS tree
     
             states, mcts_probs, current_players = [], [], []
@@ -112,7 +100,7 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                     all_play_data.append(list(zip(states, mcts_probs, winner_z)))
                     break
 
-                acts, probs = mcts.get_move_probs(env, temp=temp if len(states) < 30 else 1e-3)
+                acts, probs = mcts.get_move_probs(env, temp=temp if len(states) < 100 else 1e-3)
                 
                 # Safety Filter: Ensure MCTS only proposes legal moves
                 # This handles rare state divergence issues
@@ -211,19 +199,11 @@ class MCTSPlayer:
             acts, probs = self.mcts.get_move_probs(env, temp)
             move_probs[list(acts)] = probs
             if self._is_selfplay:
-
-                # Increased Alpha from 0.6 to 1.2 to break passive play
-                # This forces the agent to explore 'unsafe' attacks
-                noise_alpha = 1.2  
-                noise = np.random.dirichlet(noise_alpha * np.ones(len(probs)))
-                
-                # Standard epsilon is 0.25, but you can bump to 0.3 for more exploration
-                epsilon = 0.3 
-                
-                # Mix valid MCTS probs with Noise
-                p_with_noise = (1 - epsilon) * probs + epsilon * noise
-                
-                move = np.random.choice(acts, p=p_with_noise)
+                # Dirichlet Noise
+                move = np.random.choice(
+                    acts,
+                    p=0.75*probs + 0.25*np.random.dirichlet(0.6*np.ones(len(probs)))
+                )
                 self.mcts.update_with_move(move)
             else:
                 move = np.random.choice(acts, p=probs)

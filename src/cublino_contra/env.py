@@ -96,30 +96,30 @@ class CublinoContraEnv(gym.Env):
 
         # Validate Move
         if not (0 <= row < self.board_size and 0 <= col < self.board_size):
-            return self._get_obs(), -10, True, False, {"error": "Invalid source coordinates"}
+            return self._get_obs(), -1, False, True, {"error": "Invalid source coordinates", "reason": "Invalid Move"}
         
         die = self.board[row, col]
         player, top, south = die
 
         if player != self.current_player:
              # Invalid: Not your die or empty
-             return self._get_obs(), -10, True, False, {"error": "Not your die"}
+             return self._get_obs(), -1, False, True, {"error": "Not your die", "reason": "Invalid Move"}
 
         # Check Backward Move
         if self.current_player == 1 and direction == 2: # P1 cannot move South
-             return self._get_obs(), -10, True, False, {"error": "Cannot move backwards"}
+             return self._get_obs(), -1, False, True, {"error": "Cannot move backwards", "reason": "Invalid Move"}
         if self.current_player == -1 and direction == 0: # P2 cannot move North
-             return self._get_obs(), -10, True, False, {"error": "Cannot move backwards"}
+             return self._get_obs(), -1, False, True, {"error": "Cannot move backwards", "reason": "Invalid Move"}
 
         target_row, target_col = row + dr, col + dc
 
         if not (0 <= target_row < self.board_size and 0 <= target_col < self.board_size):
              # Invalid: Out of bounds
-             return self._get_obs(), -10, True, False, {"error": "Out of bounds"}
+             return self._get_obs(), -1, False, True, {"error": "Out of bounds", "reason": "Invalid Move"}
 
         if self.board[target_row, target_col, 0] != 0:
              # Invalid: Target occupied
-             return self._get_obs(), -10, True, False, {"error": "Target occupied"}
+             return self._get_obs(), -1, False, True, {"error": "Target occupied", "reason": "Invalid Move"}
 
         # Perform Move
         new_top, new_south = self._rotate_die(top, south, direction)

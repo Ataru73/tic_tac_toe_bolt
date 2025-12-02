@@ -621,39 +621,24 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
 
             obs, reward, terminated, truncated, info = current_env.step(action)
             
-            if terminated:
-                winner = info.get('winner', 0)
-                if winner == 0:
-                     print("Game Over. Draw!")
+            if terminated or truncated:
+                if truncated and info.get('reason') == "Invalid Move":
+                    print(f"Game Over. Replay truncated due to invalid move: {info.get('error', 'Unknown error')}")
+                    log_winner = 0 # No official winner for an invalid move truncation
                 else:
-                     print(f"Game Over. Winner: {winner}")
+                    winner = info.get('winner', 0)
+                    if winner == 0:
+                         print("Game Over. Draw!")
+                    else:
+                         print(f"Game Over. Winner: {winner}")
+                    log_winner = winner
                 
                 # Export game log for non-replay games
                 if not hasattr(ai_player_instance, 'state'):
                     timestamp = int(time.time())
                     filename = f"game_log_{timestamp}.json"
                     game_log_data = {
-                        "winner": int(winner),
-                        "moves": game_moves
-                    }
-                    try:
-                        with open(filename, 'w') as f:
-                            json.dump(game_log_data, f)
-                        print(f"Game logged to {filename}")
-                    except Exception as e:
-                        print(f"Failed to save game log: {e}")
-                
-                print("Press any key to exit.")
-                game_over = True
-            elif truncated:
-                print("Game Over. Draw!")
-                
-                # Export game log for non-replay games (draw)
-                if not hasattr(ai_player_instance, 'state'):
-                    timestamp = int(time.time())
-                    filename = f"game_log_{timestamp}.json"
-                    game_log_data = {
-                        "winner": 0,
+                        "winner": int(log_winner),
                         "moves": game_moves
                     }
                     try:

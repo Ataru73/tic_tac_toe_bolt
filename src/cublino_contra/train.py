@@ -25,7 +25,7 @@ except ImportError:
     from cublino_contra.mcts import MCTS, MCTS_CPP
     from cublino_contra.env import CublinoContraEnv
 
-def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_games_to_play_per_worker, draw_reward, log_game=False):
+def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_games_to_play_per_worker, draw_reward, dirichlet_alpha, log_game=False):
     """ Worker function for parallel self-play """
     torch.set_num_threads(1)
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -142,7 +142,7 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                 # alpha=1.0 ensures a flat distribution (high variety)
                 # epsilon=0.25 is standard AlphaZero mixing
                 if len(acts) > 1:
-                    noise_alpha = 1.0 
+                    noise_alpha = dirichlet_alpha 
                     epsilon = 0.25
                     noise = np.random.dirichlet(noise_alpha * np.ones(len(probs)))
                     probs = (1 - epsilon) * probs + epsilon * noise
@@ -248,7 +248,7 @@ class MCTSPlayer:
             return -1
 
 class TrainPipeline:
-    def __init__(self, init_model=None, draw_reward=-0.2, reset_scheduler=False):
+    def __init__(self, init_model=None, draw_reward=-0.2, reset_scheduler=False, dirichlet_alpha=1.2):
         self.board_size = 7
         self.learn_rate = 1e-2
         self.temp = 1.0
@@ -264,6 +264,7 @@ class TrainPipeline:
         self.game_batch_num = 1500
         self.episode_len = 0
         self.draw_reward = draw_reward
+        self.dirichlet_alpha = dirichlet_alpha
         
         self.env = CublinoContraEnv()
         self.eval_env = CublinoContraEnv()
@@ -441,7 +442,7 @@ class TrainPipeline:
         for i in range(num_workers):
             # Only ask the first worker to log a game if requested
             do_log = log_game and (i == 0)
-            futures.append(self.executor.submit(run_self_play_worker, model_path, self.c_puct, self.n_playout, device_str, self.temp, self.num_games_per_worker, self.draw_reward, do_log))
+            futures.append(self.executor.submit(run_self_play_worker, model_path, self.c_puct, self.n_playout, device_str, self.temp, self.num_games_per_worker, self.draw_reward, self.dirichlet_alpha, do_log))
         
         for future in concurrent.futures.as_completed(futures):
             try:
@@ -501,6 +502,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume", type=str, default=None)
     parser.add_argument("--draw_reward", type=float, default=-0.0, help="Reward for a draw (default: -0.0)")
     parser.add_argument("--reset_scheduler", action="store_true", help="Reset scheduler state when resuming")
+    parser.add_argument("--dirichlet_alpha", type=float, default=1.2, help="Dirichlet noise alpha parameter (default: 1.2)")
     parser.add_argument("--dry_run", action="store_true")
     args = parser.parse_args()
 
@@ -509,7 +511,7 @@ if __name__ == "__main__":
     except RuntimeError:
         pass
         
-    training = TrainPipeline(init_model=args.resume, draw_reward=args.draw_reward, reset_scheduler=args.reset_scheduler)
+    training = TrainPipeline(init_model=args.resume, draw_reward=args.draw_reward, reset_scheduler=args.reset_scheduler, dirichlet_alpha=args.dirichlet_alpha)
     if args.dry_run:
         training.game_batch_num = 2 # Run 2 batches to verify reuse
         training.play_batch_size = 1

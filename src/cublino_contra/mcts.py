@@ -62,8 +62,8 @@ class MCTS:
             if terminated or truncated:
                 # FIX: Use ground truth immediately
                 if reward != 0:
-                    # If reward is 1 (Win for parent), leaf stores 1.0
-                    leaf_value = 1.0 
+                    # If reward is 1 (Win for parent), Value for Leaf (Loser) is -1.0
+                    leaf_value = -1.0 
                 else:
                     leaf_value = 0.0
                 node.update_recursive(-leaf_value)

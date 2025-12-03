@@ -427,18 +427,43 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
         
         glRotatef(-90, 1, 0, 0) # Rotate board to be horizontal
 
-        # Draw grid
+        # Draw Marble Board
+        glEnable(GL_LIGHTING)
+        
+        # Marble Material
+        mat_ambient = [0.1, 0.1, 0.1, 1.0]
+        mat_diffuse = [0.9, 0.9, 0.95, 1.0] # Slightly bluish white
+        mat_specular = [1.0, 1.0, 1.0, 1.0]
+        mat_shininess = [100.0]
+
+        glMaterialfv(GL_FRONT, GL_AMBIENT, mat_ambient)
+        glMaterialfv(GL_FRONT, GL_DIFFUSE, mat_diffuse)
+        glMaterialfv(GL_FRONT, GL_SPECULAR, mat_specular)
+        glMaterialfv(GL_FRONT, GL_SHININESS, mat_shininess)
+
+        # Board Base
+        glPushMatrix()
+        glTranslatef(3.5, 3.5, -0.5) # Center under the grid (grid is 0-7, z=0)
+        glScalef(8.0, 8.0, 1.0) # Make it slightly larger than 7x7
+        glutSolidCube(1.0)
+        glPopMatrix()
+
+        # Draw grid lines on top
         glDisable(GL_LIGHTING)
-        glColor3f(0.5, 0.5, 0.5) # Grey lines
+        glDisable(GL_TEXTURE_2D) # Ensure no texture interferes
+        glColor3f(0.3, 0.3, 0.3) # Darker grey lines for contrast
         glLineWidth(2.0)
+        
+        z_offset = 0.01 # Slightly above the board
+        
         for i in range(8):
             glBegin(GL_LINES)
-            glVertex3f(i, 0, 0)
-            glVertex3f(i, 7, 0)
+            glVertex3f(i, 0, z_offset)
+            glVertex3f(i, 7, z_offset)
             glEnd()
             glBegin(GL_LINES)
-            glVertex3f(0, i, 0)
-            glVertex3f(7, i, 0)
+            glVertex3f(0, i, z_offset)
+            glVertex3f(7, i, z_offset)
             glEnd()
         glEnable(GL_LIGHTING)
 
@@ -557,7 +582,7 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
                     human_player_instance.pending_action = action
                     human_player_instance.selected_square = None
                     human_player_instance.legal_moves = []
-                    game_loop_idle() # Process the move immediately
+                    # game_loop_idle() # Process the move immediately - Removed to allow display update
                     break
             else:
                 # Not a legal target, deselect

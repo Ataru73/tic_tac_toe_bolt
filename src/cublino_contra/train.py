@@ -67,7 +67,8 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
 
         all_play_data = []
         worker_game_stats = {1: 0, -1: 0, 0: 0} # 1: P1 wins, -1: P2 wins, 0: Draws
-        game_log_data = None # To store the log of the first game if requested
+        game_log_data = [] # To store the log of the first game if requested
+        has_logged_game = False
     
         for game_idx in range(num_games_to_play_per_worker):
             env.reset()
@@ -75,16 +76,25 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
     
             states, mcts_probs, current_players = [], [], []
             game_moves = [] # Store moves for logging
+            current_game_log = []
             divergence_detected = False
             illegal_moves_log = []
             
             while True:
+                # Store full state for logging if requested
+                if log_game and not has_logged_game:
+                    current_game_log.append({
+                        "board_state": env.board.tolist(), # Convert numpy array to list for JSON
+                        "current_player_at_step": int(env.current_player),
+                        "move": None # Will be filled after move selection
+                    })
+
                 # Store state as (12, 7, 7) for training - 4 stacked states * 3 channels
                 obs = env._get_obs()  # Get stacked observation (7, 7, 12)
                 state_tensor = np.transpose(obs, (2, 0, 1))  # (12, 7, 7)
                 states.append(state_tensor)
-                
                 legal_moves = env.get_legal_actions()
+                
                 if len(legal_moves) == 0:
                     # No legal moves - Loss for current player
                     winner_val = -env.current_player
@@ -98,6 +108,9 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                         winner_z[:] = draw_reward
                     
                     all_play_data.append(list(zip(states, mcts_probs, winner_z)))
+                    if log_game and not has_logged_game:
+                        game_log_data = current_game_log
+                        has_logged_game = True
                     break
 
                 acts, probs = mcts.get_move_probs(env, temp=temp if len(states) < 100 else 1e-3)
@@ -125,6 +138,15 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                     probs = np.array(probs)
                     probs /= probs.sum()
 
+                # Force Exploration: Add Dirichlet noise to the root node probabilities
+                # alpha=1.0 ensures a flat distribution (high variety)
+                # epsilon=0.25 is standard AlphaZero mixing
+                if len(acts) > 1:
+                    noise_alpha = 1.0 
+                    epsilon = 0.25
+                    noise = np.random.dirichlet(noise_alpha * np.ones(len(probs)))
+                    probs = (1 - epsilon) * probs + epsilon * noise
+
                 prob_vec = np.zeros(196) # 7*7*4
                 for a, p in zip(acts, probs):
                     prob_vec[a] = p
@@ -132,6 +154,10 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                 current_players.append(env.current_player)
                 
                 move = np.random.choice(acts, p=probs)
+
+                if log_game and not has_logged_game and len(current_game_log) > 0:
+                    current_game_log[-1]["move"] = int(move)
+
                 mcts.update_with_move(move)
                 
                 game_moves.append(int(move))
@@ -149,7 +175,8 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                             "winner": 0,
                             "moves": game_moves,
                             "error": info.get('error', 'MCTS proposed illegal moves'),
-                            "divergence_details": illegal_moves_log
+                            "divergence_details": illegal_moves_log,
+                            "full_game_log": current_game_log # Include full log for error cases
                         }
                         try:
                             with open(filename, 'w') as f:
@@ -157,6 +184,10 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                             print(f"{log_type.capitalize()} logged to {filename}")
                         except Exception as e:
                             print(f"Failed to write log: {e}")
+                        
+                        # Discard this game's data and start a new one
+                        print("WORKER: Game ended with an error. Discarding data and starting a new game.")
+                        break
 
                     winner_val = info.get('winner', 0)
                     worker_game_stats[winner_val] += 1
@@ -170,12 +201,12 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                     
                     all_play_data.append(list(zip(states, mcts_probs, winner_z)))
                     
-                    if log_game and game_idx == 0:
-                        game_log_data = {
-                            "winner": int(winner_val),
-                            "moves": game_moves
-                        }
+                    if log_game and not has_logged_game:
+                        game_log_data = current_game_log
+                        has_logged_game = True
                     break
+            if has_logged_game:
+                break
     
         return all_play_data, worker_game_stats, game_log_data
     except Exception as e:
@@ -219,7 +250,7 @@ class MCTSPlayer:
 class TrainPipeline:
     def __init__(self, init_model=None, draw_reward=-0.2):
         self.board_size = 7
-        self.learn_rate = 2e-3
+        self.learn_rate = 1e-2
         self.temp = 1.0
         self.n_playout = 400
         self.c_puct = 5
@@ -418,8 +449,8 @@ class TrainPipeline:
                 for player, count in worker_game_stats.items():
                     self.batch_game_stats[player] += count
                 
-                # Save game log if returned
-                if game_log_data is not None:
+                # Save game log if returned and not empty
+                if game_log_data: # An empty list evaluates to False
                     import json
                     timestamp = int(time.time())
                     filename = f"game_log_{timestamp}.json"
@@ -449,11 +480,13 @@ class TrainPipeline:
             value_loss = F.mse_loss(value.view(-1), winner_tensor)
             policy_loss = -torch.mean(torch.sum(mcts_probs_tensor * log_act_probs, 1))
             
-            loss = value_loss + policy_loss
+            entropy = -torch.mean(torch.sum(torch.exp(log_act_probs) * log_act_probs, 1))
+            
+            loss = value_loss + policy_loss - 0.01 * entropy
+
             loss.backward()
             self.optimizer.step()
             
-            entropy = -torch.mean(torch.sum(torch.exp(log_act_probs) * log_act_probs, 1))
             
         return loss.item(), entropy.item()
 

@@ -159,20 +159,29 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
     if replay_file:
         with open(replay_file, 'r') as f:
             data = json.load(f)
-        moves = data['moves']
-        winner = data['winner']
+        
+        initial_board = None
+        initial_player = None
+
+        if isinstance(data, list):
+            # New format
+            moves = [step['move'] for step in data if 'move' in step]
+            winner = "Unknown"
+            
+            # Check for initial state in first record
+            if len(data) > 0 and 'board_state' in data[0]:
+                initial_board = data[0]['board_state']
+                if 'current_player_at_step' in data[0]:
+                    initial_player = data[0]['current_player_at_step']
+        else:
+            # Old format
+            moves = data['moves']
+            winner = data['winner']
+            
         print(f"Replaying game from {replay_file}. Winner: {winner}")
         
-        # In replay mode, both players are ReplayPlayer, sharing the move list
-        # But we need to dispatch moves to the correct player instance based on turn
-        # Actually, simpler: One ReplayPlayer instance acts for BOTH, or we have two instances
-        # that coordinate.
-        # Let's use two instances, but they need to know which moves are theirs.
-        # OR, simpler: The game loop asks the current player.
-        # If we give the full list to both, they just need to pop the next move when it's their turn.
-        # But wait, get_action is called for the current player.
-        # So if we have a shared iterator/index, it works.
-        
+        # ... (Rest of Replay setup) ...
+
         class SharedReplayState:
             def __init__(self, moves):
                 self.moves = moves
@@ -205,6 +214,7 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
         ai_player.set_player_ind(-1)
         
     else:
+        # ... (Normal play setup) ...
         # Load model
         policy_value_net = PolicyValueNet(board_size=7).to(device)
         if model_path and os.path.exists(model_path):
@@ -260,6 +270,13 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
     ai_player_instance = ai_player
     current_player_is_human = human_starts if not replay_file else False # In replay, neither is "human" in the interactive sense
     game_moves = []  # Reset game moves list
+
+    # Set custom initial state if provided (for partial replay)
+    if replay_file and 'initial_board' in locals() and initial_board is not None:
+        env.unwrapped.board = np.array(initial_board, dtype=np.int8)
+        if initial_player is not None:
+             env.unwrapped.current_player = initial_player
+        print("Loaded custom initial state from replay file.")
 
     # 4. Init OpenGL
     if not bool(glutInit):

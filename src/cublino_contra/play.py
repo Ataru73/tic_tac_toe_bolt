@@ -152,6 +152,85 @@ class ReplayPlayer:
             return action
         return None
 
+def generate_marble_texture(width=512, height=512):
+    # Procedural Marble Texture using Fractal Noise
+    # Formula: marble(x,y) = sin(f * (x + a * turb(x,y)))
+    
+    # 1. Generate Turbulence (Fractal Noise)
+    turbulence = np.zeros((width, height))
+    octaves = 4 # Reduced octaves to avoid high-freq noise
+    
+    for i in range(octaves):
+        # Scale: Start low freq (large scale), go to high freq
+        # i=0: scale=128, i=1: 64, i=2: 32, i=3: 16
+        # Avoids 8, 4, 2 scales which cause graininess
+        scale = 2 ** (7 - i) 
+        
+        # Generate small noise
+        grid_w = int(np.ceil(width / scale))
+        grid_h = int(np.ceil(height / scale))
+        noise_layer = np.random.rand(grid_w, grid_h)
+        
+        # Upscale to full size
+        full_noise = np.kron(noise_layer, np.ones((scale, scale)))
+        full_noise = full_noise[:width, :height]
+        
+        # Smooth to remove blocks
+        passes = int(scale * 1.5) # More smoothing passes
+        for _ in range(passes):
+             full_noise = (np.roll(full_noise, 1, axis=0) + np.roll(full_noise, -1, axis=0) +
+                           np.roll(full_noise, 1, axis=1) + np.roll(full_noise, -1, axis=1) + 4*full_noise) / 8.0
+        
+        # Add to turbulence
+        amplitude = 0.5 ** i
+        turbulence += np.abs(full_noise - 0.5) * amplitude
+
+    # Normalize turbulence
+    turbulence = (turbulence - turbulence.min()) / (turbulence.max() - turbulence.min())
+    
+    # 2. Marble Formula
+    x = np.linspace(0, 1, width)
+    y = np.linspace(0, 1, height)
+    X, Y = np.meshgrid(x, y)
+    
+    # Parameters
+    freq = 3.0 * 2 * np.pi # Slightly fewer stripes
+    amp = 2.0 # Slightly less distortion
+    
+    # Pattern: sin(f * (x + a * turb))
+    pattern = np.sin(freq * ((X + Y) + amp * turbulence))
+    
+    # Map -1..1 to 0..1
+    pattern = (pattern + 1) / 2.0
+    
+    # 3. Color Mapping
+    texture = np.zeros((width, height, 3), dtype=np.float32)
+    
+    # Colors
+    col_vein = np.array([0.6, 0.6, 0.65]) # Light Grey/Blue
+    col_body = np.array([0.98, 0.98, 0.98]) # White
+    
+    # Sharpen veins (higher power = thinner veins, more white body)
+    pattern = pattern ** 0.4 # Lower power biases towards 1 (white) for lighter look
+    # Actually, to make veins distinct but smooth, we want a smooth transition.
+    # Let's try a slight sigmoid or just keep it linear-ish but biased towards white.
+    # pattern ** 0.5 biases towards 1 (white).
+    
+    for c in range(3):
+        texture[:,:,c] = pattern * col_body[c] + (1-pattern) * col_vein[c]
+        
+    tex_data = (texture * 255).astype(np.uint8)
+    
+    tex_id = glGenTextures(1)
+    glBindTexture(GL_TEXTURE_2D, tex_id)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, tex_data)
+    
+    return tex_id
+
 def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None):
     # 1. Initialize Environment
     env = gym.make("CublinoContra-v0")
@@ -311,6 +390,9 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
     glLightfv(GL_LIGHT0, GL_DIFFUSE, [1.0, 1.0, 1.0, 1.0])
     glLightfv(GL_LIGHT0, GL_SPECULAR, [1.0, 1.0, 1.0, 1.0])
 
+    # Generate Marble Texture
+    marble_tex_id = generate_marble_texture()
+
     # Helper for die logic
     _val_to_vec = {
         1: np.array([0, 0, 1]),
@@ -442,11 +524,56 @@ def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None
         glMaterialfv(GL_FRONT, GL_SHININESS, mat_shininess)
 
         # Board Base
+        # Board Base with Texture
+        glEnable(GL_TEXTURE_2D)
+        glBindTexture(GL_TEXTURE_2D, marble_tex_id)
+        
         glPushMatrix()
-        glTranslatef(3.5, 3.5, -0.5) # Center under the grid (grid is 0-7, z=0)
-        glScalef(8.0, 8.0, 1.0) # Make it slightly larger than 7x7
-        glutSolidCube(1.0)
+        glTranslatef(3.5, 3.5, -0.5) 
+        glScalef(8.0, 8.0, 1.0) 
+        
+        glColor3f(1.0, 1.0, 1.0)
+        glBegin(GL_QUADS)
+        # Top Face
+        glNormal3f( 0.0, 0.0, 1.0)
+        glTexCoord2f(0.0, 0.0); glVertex3f(-0.5, -0.5,  0.5)
+        glTexCoord2f(1.0, 0.0); glVertex3f( 0.5, -0.5,  0.5)
+        glTexCoord2f(1.0, 1.0); glVertex3f( 0.5,  0.5,  0.5)
+        glTexCoord2f(0.0, 1.0); glVertex3f(-0.5,  0.5,  0.5)
+        # Bottom Face
+        glNormal3f( 0.0, 0.0,-1.0)
+        glTexCoord2f(0.0, 0.0); glVertex3f(-0.5, -0.5, -0.5)
+        glTexCoord2f(1.0, 0.0); glVertex3f( 0.5, -0.5, -0.5)
+        glTexCoord2f(1.0, 1.0); glVertex3f( 0.5,  0.5, -0.5)
+        glTexCoord2f(0.0, 1.0); glVertex3f(-0.5,  0.5, -0.5)
+        # Sides
+        glNormal3f( 0.0, 1.0, 0.0)
+        glTexCoord2f(0.0, 0.0); glVertex3f(-0.5,  0.5, -0.5)
+        glTexCoord2f(1.0, 0.0); glVertex3f(-0.5,  0.5,  0.5)
+        glTexCoord2f(1.0, 1.0); glVertex3f( 0.5,  0.5,  0.5)
+        glTexCoord2f(0.0, 1.0); glVertex3f( 0.5,  0.5, -0.5)
+        
+        glNormal3f( 0.0,-1.0, 0.0)
+        glTexCoord2f(1.0, 0.0); glVertex3f(-0.5, -0.5, -0.5)
+        glTexCoord2f(1.0, 1.0); glVertex3f(-0.5, -0.5,  0.5)
+        glTexCoord2f(0.0, 1.0); glVertex3f( 0.5, -0.5,  0.5)
+        glTexCoord2f(0.0, 0.0); glVertex3f( 0.5, -0.5, -0.5)
+
+        glNormal3f( 1.0, 0.0, 0.0)
+        glTexCoord2f(1.0, 0.0); glVertex3f( 0.5, -0.5, -0.5)
+        glTexCoord2f(1.0, 1.0); glVertex3f( 0.5, -0.5,  0.5)
+        glTexCoord2f(0.0, 1.0); glVertex3f( 0.5,  0.5,  0.5)
+        glTexCoord2f(0.0, 0.0); glVertex3f( 0.5,  0.5, -0.5)
+
+        glNormal3f(-1.0, 0.0, 0.0)
+        glTexCoord2f(0.0, 0.0); glVertex3f(-0.5, -0.5, -0.5)
+        glTexCoord2f(1.0, 0.0); glVertex3f(-0.5, -0.5,  0.5)
+        glTexCoord2f(1.0, 1.0); glVertex3f(-0.5,  0.5,  0.5)
+        glTexCoord2f(0.0, 1.0); glVertex3f(-0.5,  0.5, -0.5)
+        glEnd()
+
         glPopMatrix()
+        glDisable(GL_TEXTURE_2D)
 
         # Draw grid lines on top
         glDisable(GL_LIGHTING)

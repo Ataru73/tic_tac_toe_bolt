@@ -770,6 +770,10 @@ def run_game(model_path=None, human_starts=True, difficulty=40, replay_file=None
                 elif d == 2: dr = -1 # South (Row - 1)
                 elif d == 3: dc = -1 # West (Col - 1)
                 
+                # Check for backward moves
+                if human_player_instance.player == 1 and d == 2: continue
+                if human_player_instance.player == -1 and d == 0: continue
+
                 tr, tc = board_y + dr, board_x + dc
                 if 0 <= tr < 7 and 0 <= tc < 7 and current_env.unwrapped.board[tr, tc, 0] == 0:
                     human_player_instance.legal_moves.append((tr, tc, d))
@@ -917,7 +921,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, help="Path to model .pth file")
     parser.add_argument("--ai_starts", action="store_true", help="If set, AI starts first")
-    parser.add_argument("--difficulty", type=int, default=20, choices=range(1, 41), help="Difficulty level (1-40)")
+    parser.add_argument("--difficulty", type=int, default=40, choices=range(1, 41), help="Difficulty level (1-40)")
     parser.add_argument("--replay", type=str, help="Path to game log JSON file for replay")
     args = parser.parse_args()
     

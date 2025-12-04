@@ -258,11 +258,11 @@ class MCTSPlayer:
             return -1
 
 class TrainPipeline:
-    def __init__(self, init_model=None, draw_reward=-0.2, reset_scheduler=False, dirichlet_alpha=1.2, mixing_epsilon=0.25, random_initial_moves=0):
+    def __init__(self, init_model=None, draw_reward=-0.2, reset_scheduler=False, dirichlet_alpha=1.2, mixing_epsilon=0.25, random_initial_moves=0, simulations=800):
         self.board_size = 7
         self.learn_rate = 1e-2
         self.temp = 1.0
-        self.n_playout = 800
+        self.n_playout = simulations
         self.c_puct = 5
         self.buffer_size = 10000
         self.batch_size = 256
@@ -517,6 +517,7 @@ if __name__ == "__main__":
     parser.add_argument("--dirichlet_alpha", type=float, default=1.2, help="Dirichlet noise alpha parameter (default: 1.2)")
     parser.add_argument("--mixing_epsilon", type=float, default=0.25, help="Mixing epsilon for Dirichlet noise (default: 0.25)")
     parser.add_argument("--random_initial_moves", type=int, default=0, help="Number of random initial moves (must be even, default: 0)")
+    parser.add_argument("--simulations", type=int, default=800, help="Number of MCTS simulations (default: 800)")
     parser.add_argument("--dry_run", action="store_true")
     args = parser.parse_args()
 
@@ -528,7 +529,7 @@ if __name__ == "__main__":
     except RuntimeError:
         pass
         
-    training = TrainPipeline(init_model=args.resume, draw_reward=args.draw_reward, reset_scheduler=args.reset_scheduler, dirichlet_alpha=args.dirichlet_alpha, mixing_epsilon=args.mixing_epsilon, random_initial_moves=args.random_initial_moves)
+    training = TrainPipeline(init_model=args.resume, draw_reward=args.draw_reward, reset_scheduler=args.reset_scheduler, dirichlet_alpha=args.dirichlet_alpha, mixing_epsilon=args.mixing_epsilon, random_initial_moves=args.random_initial_moves, simulations=args.simulations)
     if args.dry_run:
         training.game_batch_num = 2 # Run 2 batches to verify reuse
         training.play_batch_size = 1

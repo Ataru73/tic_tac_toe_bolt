@@ -274,7 +274,7 @@ def generate_wood_texture(base_color, vein_color, width=256, height=256):
     
     return tex_id
 
-def run_game(model_path=None, human_starts=True, difficulty=20, replay_file=None):
+def run_game(model_path=None, human_starts=True, difficulty=40, replay_file=None):
     # 1. Initialize Environment
     env = gym.make("CublinoContra-v0")
     env.reset()
@@ -917,7 +917,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, help="Path to model .pth file")
     parser.add_argument("--ai_starts", action="store_true", help="If set, AI starts first")
-    parser.add_argument("--difficulty", type=int, default=20, choices=range(1, 21), help="Difficulty level (1-20)")
+    parser.add_argument("--difficulty", type=int, default=20, choices=range(1, 41), help="Difficulty level (1-40)")
     parser.add_argument("--replay", type=str, help="Path to game log JSON file for replay")
     args = parser.parse_args()
     

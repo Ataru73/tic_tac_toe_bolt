@@ -262,7 +262,7 @@ class TrainPipeline:
         self.board_size = 7
         self.learn_rate = 1e-2
         self.temp = 1.0
-        self.n_playout = 400
+        self.n_playout = 800
         self.c_puct = 5
         self.buffer_size = 10000
         self.batch_size = 256

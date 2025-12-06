@@ -267,16 +267,18 @@ class TrainPipeline:
         self.buffer_size = 10000
         self.batch_size = 256
         self.data_buffer = deque(maxlen=self.buffer_size)
-        self.play_batch_size = 40 # Increased from 20 to use 8 workers (40/5=8)
-        self.num_games_per_worker = 5 # Increased from 1
+        self.play_batch_size = 40
+        self.num_games_per_worker = 5
         self.epochs = 5
-        self.check_freq = 50
+        self.check_freq = 25
         self.game_batch_num = 1500
         self.episode_len = 0
         self.draw_reward = draw_reward
         self.dirichlet_alpha = dirichlet_alpha
         self.mixing_epsilon = mixing_epsilon
         self.random_initial_moves = random_initial_moves
+        self.max_workers = self.play_batch_size // self.num_games_per_worker
+
         
         self.env = CublinoContraEnv()
         self.eval_env = CublinoContraEnv()
@@ -308,7 +310,6 @@ class TrainPipeline:
             print(f"Loaded {loaded_items} from {init_model}")
 
         # Persistent ProcessPoolExecutor
-        self.max_workers = 8 # Explicitly set to 8 workers
         self.executor = concurrent.futures.ProcessPoolExecutor(max_workers=self.max_workers)
         print(f"Initialized ProcessPoolExecutor with {self.max_workers} workers")
 

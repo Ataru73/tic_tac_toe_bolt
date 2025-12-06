@@ -43,7 +43,7 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
         if not use_cpp:
             device = torch.device(device_str)
             # Load model - handle TorchScript format
-            policy_value_net = PolicyValueNet(board_size=7).to(device)
+            policy_value_net = PolicyValueNet(board_size=7, num_res_blocks=10, num_filters=128).to(device)
             # The model_path is a TorchScript file, so load it and extract state_dict
             scripted_model = torch.jit.load(model_path, map_location=device)
             policy_value_net.load_state_dict(scripted_model.state_dict())
@@ -123,7 +123,7 @@ def run_self_play_worker(model_path, c_puct, n_playout, device_str, temp, num_ga
                         has_logged_game = True
                     break
 
-                acts, probs = mcts.get_move_probs(env, temp=temp if len(states) < 100 else 1e-3)
+                acts, probs = mcts.get_move_probs(env, temp=temp if len(states) < 30 else 1e-3)
                 
                 # Safety Filter: Ensure MCTS only proposes legal moves
                 # This handles rare state divergence issues
@@ -286,7 +286,7 @@ class TrainPipeline:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
 
-        self.policy_value_net = PolicyValueNet(board_size=self.board_size).to(self.device)
+        self.policy_value_net = PolicyValueNet(board_size=self.board_size, num_res_blocks=10, num_filters=128).to(self.device)
         self.optimizer = optim.Adam(self.policy_value_net.parameters(), weight_decay=1e-4)
         self.scheduler = lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.game_batch_num, eta_min=1e-5)
 
@@ -400,9 +400,15 @@ class TrainPipeline:
                     print(f"Best Policy Wins: {win_cnt[-1]}")
                     print(f"Draws: {win_cnt[0]}")
                     
-                    # Always update best_policy_net to keep data generation fresh
-                    print("Updating self-play model to latest version...")
-                    self.best_policy_net.load_state_dict(self.policy_value_net.state_dict())
+                    win_ratio = 0
+                    if win_cnt[1] + win_cnt[-1] > 0:
+                        win_ratio = win_cnt[1] / (win_cnt[1] + win_cnt[-1])
+
+                    if win_ratio >= 0.5: # Only update if clearly better
+                        print(f"New policy is stronger (Win rate {win_ratio:.2f}). Updating...")
+                        self.best_policy_net.load_state_dict(self.policy_value_net.state_dict())
+                    else:
+                        print(f"New policy is weaker (Win rate {win_ratio:.2f}). Rejecting update.")
                     
                     # Save checkpoint regardless of win rate
                     torch.save({
